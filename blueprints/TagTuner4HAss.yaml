@@ -235,7 +235,7 @@ variables:
     {%endif%}
   plex_scan_button: >-
     {%if video_enabled %}
-      {{ integration_entities('plex') | select('match', 'button\.scan_clients') | first | default('') }}
+      {{ integration_entities('plex') | select('match', 'button\..*scan_clients') | first | default('') }}
     {%endif%}
 
 triggers:
