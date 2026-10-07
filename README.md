@@ -186,7 +186,7 @@ Video tags hold `plexvideo://` followed by a Plex search in JSON. Library and ti
 | `plexvideo://{"library_name":"TV Shows","show_name":"Bluey","shuffle":true}` | random episodes |
 | `plexvideo://{"library_name":"TV Shows","show_name":"Bluey","season_number":1,"episode_number":3}` | that episode |
 
-To write one, import [TagTunerWriteVideoTag.yaml](blueprints/TagTunerWriteVideoTag.yaml) as a script blueprint, create a script from it, run it, fill in the fields and place a tag on the reader. You can also type the URI into the reader's Playlist URI box and press Write Tag.
+To write one, import [TagTunerWriteVideoTag.yaml](blueprints/TagTunerWriteVideoTag.yaml) as a script blueprint, create a script from it, run it, fill in the fields and place a tag on the reader within 30 seconds. Take the tag off the reader before running it: a tag already sitting there is skipped, for writing and erasing alike. You can also type the URI into the reader's Playlist URI box and press Write Tag.
 
 While a video tag is the last tag scanned:
 - click: play/pause

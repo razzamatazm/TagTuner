@@ -2,8 +2,8 @@ blueprint:
   name: TagTuner write Plex video tag
   description: >-
     Builds a plexvideo:// tag for a Plex movie, show or episode and writes it
-    with your TagTuner. Run the script, fill in the fields, then place a tag
-    on the reader within 30 seconds.
+    with your TagTuner. Take any tag off the reader, run the script, then
+    place the tag within 30 seconds. A tag left on the reader is skipped.
   domain: script
   input:
     tuner_id:
