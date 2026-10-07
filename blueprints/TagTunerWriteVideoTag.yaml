@@ -1,0 +1,128 @@
+blueprint:
+  name: TagTuner write Plex video tag
+  description: >-
+    Builds a plexvideo:// tag for a Plex movie, show or episode and writes it
+    with your TagTuner. Run the script, fill in the fields, then place a tag
+    on the reader within 30 seconds.
+  domain: script
+  input:
+    tuner_id:
+      name: TagTuner for ESPHome
+      description: The reader that writes the tags
+      selector:
+        device:
+          filter:
+            - integration: esphome
+
+fields:
+  kind:
+    name: Kind
+    required: true
+    default: show
+    selector:
+      select:
+        options:
+          - label: Movie
+            value: movie
+          - label: Whole show
+            value: show
+          - label: One episode
+            value: episode
+  library:
+    name: Plex library
+    description: exactly as shown in Plex, e.g. Movies or TV Shows
+    required: true
+    selector:
+      text:
+  title:
+    name: Title
+    description: movie title or show name, exactly as shown in Plex
+    required: true
+    selector:
+      text:
+  year:
+    name: Year
+    description: movies only, needed when two movies share a title
+    selector:
+      number:
+        min: 1900
+        max: 2100
+        mode: box
+  order:
+    name: Order
+    description: whole shows only
+    default: in_order
+    selector:
+      select:
+        options:
+          - label: In order, next unwatched episode
+            value: in_order
+          - label: Random episodes
+            value: random
+  season:
+    name: Season
+    description: one episode only
+    selector:
+      number:
+        min: 0
+        max: 100
+        mode: box
+  episode:
+    name: Episode
+    description: one episode only
+    selector:
+      number:
+        min: 1
+        max: 1000
+        mode: box
+
+variables:
+  tuner_device_id: !input tuner_id
+  tag_request: >-
+    {% set r = {'library_name': library} %}
+    {% if kind == 'movie' %}
+      {% set r = dict(r, title=title) %}
+      {% if year|default(none) %}{% set r = dict(r, year=year|int) %}{% endif %}
+    {% else %}
+      {% set r = dict(r, show_name=title) %}
+      {% if kind == 'episode' %}
+        {% set r = dict(r, season_number=season|int, episode_number=episode|int) %}
+      {% elif order == 'random' %}
+        {% set r = dict(r, shuffle=true) %}
+      {% endif %}
+    {% endif %}
+    plexvideo://{{ r | to_json }}
+  text_playlist_uri: >-
+    {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_uri') | first }}
+  text_playlist_artist: >-
+    {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_artist') | first }}
+  text_playlist_name: >-
+    {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_name_or_album_title') | first }}
+  button_write_tag: >-
+    {{ device_entities(tuner_device_id) | select('match', '^button\..*_write_tag') | first }}
+
+sequence:
+  - condition: template
+    value_template: "{{ kind != 'episode' or (season|default(none) is not none and episode|default(none) is not none) }}"
+  - condition: template
+    value_template: "{{ tag_request|length <= 255 }}"
+  - action: text.set_value
+    data:
+      value: "{%if kind != 'movie' %}{{ title|truncate(50, true, '…') }}{%endif%}"
+    target:
+      entity_id: "{{ text_playlist_artist }}"
+  - action: text.set_value
+    data:
+      value: >-
+        {%if kind == 'episode' %}S{{ season|int }}E{{ episode|int }}{%else%}{{ title|truncate(100, true, '…') }}{%endif%}
+    target:
+      entity_id: "{{ text_playlist_name }}"
+  - action: text.set_value
+    data:
+      value: "{{ tag_request }}"
+    target:
+      entity_id: "{{ text_playlist_uri }}"
+  - action: button.press
+    target:
+      entity_id: "{{ button_write_tag }}"
+mode: single

@@ -37,6 +37,43 @@ blueprint:
         entity:
           filter:
             - domain: media_player
+    video:
+      name: Plex videos on Apple TV
+      description: Optional. Lets plexvideo:// tags play Plex movies and shows on an Apple TV. Leave empty and video tags are ignored.
+      collapsed: true
+      input:
+        appletv:
+          name: Apple TV
+          description: Apple TV media player from the Apple TV integration
+          default: ""
+          selector:
+            entity:
+              filter:
+                - integration: apple_tv
+                  domain: media_player
+        plexplayer:
+          name: Plex player on the Apple TV
+          description: Plex integration media player for the Plex app on this Apple TV. Open Plex on the Apple TV once so it shows up
+          default: ""
+          selector:
+            entity:
+              filter:
+                - integration: plex
+                  domain: media_player
+        plex_app_name:
+          name: Plex app name
+          description: as listed in the Apple TV sources
+          default: Plex
+        video_timeout:
+          name: Startup timeout
+          description: seconds to wait for Plex to wake up on the Apple TV
+          default: 60
+          selector:
+            number:
+              min: 10
+              max: 180
+              step: 5
+              unit_of_measurement: s
     options:
       name: Additional settings
       collapsed: true
@@ -141,7 +178,9 @@ variables:
       {{ trigger.event.data.uri }}
     {%endif%}
   source: >-
-    {%if uri[0:5]=='https' %}
+    {%if uri[0:12]=='plexvideo://' %}
+      video
+    {%elif uri[0:5]=='https' %}
       http
     {%elif uri[0:5]=='sonos' %}
       sonos
@@ -184,6 +223,20 @@ variables:
   blprnt_version: !input version
   default_volume_set: !input default_volume_set
   default_volume: !input default_volume
+  appletv: !input appletv
+  plexplayer: !input plexplayer
+  plex_app_name: !input plex_app_name
+  video_timeout: !input video_timeout
+  video_enabled: "{{ appletv not in ('', none) and plexplayer not in ('', none) }}"
+  video_current: "{{ video_enabled and states(text_playlist_uri)[0:12] == 'plexvideo://' }}"
+  appletv_remote: >-
+    {%if video_enabled %}
+      {{ device_entities(device_id(appletv)) | select('match', 'remote\.') | first | default('') }}
+    {%endif%}
+  plex_scan_button: >-
+    {%if video_enabled %}
+      {{ integration_entities('plex') | select('match', 'button\.scan_clients') | first | default('') }}
+    {%endif%}
 
 triggers:
   - trigger: event
@@ -205,6 +258,9 @@ actions:
         sequence:
           - condition: template
             value_template: "{{ stop_on_tagremoved == true }}"
+          - alias: videos keep playing when the tag is lifted
+            condition: template
+            value_template: "{{ not video_current }}"
           - action: media_player.media_pause
             target:
               entity_id: !input httpplayer
@@ -216,6 +272,146 @@ actions:
                 - !input httpplayer
                 - !input massplayer
         alias: tag_removed
+
+      - conditions:
+          - condition: template
+            value_template: '{{ action == "tagScanned" and source == "video" }}'
+        sequence:
+          - condition: template
+            value_template: "{{ video_enabled }}"
+          - variables:
+              video_request: "{{ uri[12:] | from_json(default={}) }}"
+              video_show_in_order: >-
+                {{ 'show_name' in video_request
+                and 'season_number' not in video_request
+                and 'episode_number' not in video_request
+                and 'episode_name' not in video_request
+                and not video_request.get('shuffle', false) }}
+              video_content_type: "{%if 'show_name' in video_request %}episode{%else%}movie{%endif%}"
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: "{{ is_state(text_playlist_uri, uri) }}"
+                  - condition: state
+                    entity_id: !input appletv
+                    state:
+                      - playing
+                      - paused
+                sequence:
+                  - if:
+                      - condition: state
+                        entity_id: !input appletv
+                        state: paused
+                    then:
+                      - action: media_player.media_play
+                        target:
+                          entity_id: !input appletv
+                alias: same video rescan
+            default:
+              - alias: one source at a time
+                if:
+                  - condition: state
+                    entity_id: !input httpplayer
+                    state: playing
+                then:
+                  - action: media_player.media_pause
+                    target:
+                      entity_id: !input httpplayer
+              - action: media_player.turn_on
+                target:
+                  entity_id: !input appletv
+              - if:
+                  - condition: template
+                    value_template: "{{ not is_state_attr(appletv, 'app_name', plex_app_name) }}"
+                then:
+                  - action: media_player.select_source
+                    data:
+                      source: !input plex_app_name
+                    target:
+                      entity_id: !input appletv
+                  - wait_template: "{{ is_state_attr(appletv, 'app_name', plex_app_name) }}"
+                    timeout:
+                      seconds: 20
+              - alias: wait for the Plex player to show up
+                repeat:
+                  sequence:
+                    - if:
+                        - condition: template
+                          value_template: "{{ plex_scan_button != '' }}"
+                      then:
+                        - action: button.press
+                          target:
+                            entity_id: "{{ plex_scan_button }}"
+                    - wait_template: "{{ states(plexplayer) not in ('unavailable', 'unknown') }}"
+                      timeout:
+                        seconds: 6
+                  until:
+                    - condition: template
+                      value_template: >-
+                        {{ states(plexplayer) not in ('unavailable', 'unknown')
+                        or repeat.index * 6 >= video_timeout|int }}
+              - if:
+                  - condition: template
+                    value_template: "{{ states(plexplayer) in ('unavailable', 'unknown') }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: tagtuner_video_{{ device_attr(tuner_device_id, "name") }}
+                      title: TagTuner video
+                      message: >-
+                        Plex did not show up on {{ state_attr(appletv, 'friendly_name') }} within {{ video_timeout }}s.
+                        Check that Plex is installed, signed in, and has Advertise as Player turned on.
+
+                        Tag: {{ uri }}
+                  - stop: Plex player unavailable
+              - action: media_player.play_media
+                continue_on_error: true
+                data:
+                  media_content_type: "{{ video_content_type }}"
+                  media_content_id: >-
+                    {%if video_show_in_order %}
+                      plex://{{ {'library_name': video_request.library_name, 'show.title': video_request.show_name,
+                      'libtype': 'episode', 'unwatched': true, 'sort': 'originallyAvailableAt:asc',
+                      'maxresults': 1, 'continuous': true, 'resume': true} | to_json }}
+                    {%elif 'resume' in video_request or 'offset' in video_request %}
+                      plex://{{ video_request | to_json }}
+                    {%else%}
+                      plex://{{ dict(video_request, resume=true) | to_json }}
+                    {%endif%}
+                target:
+                  entity_id: !input plexplayer
+              - wait_template: "{{ is_state(plexplayer, 'playing') }}"
+                timeout:
+                  seconds: 20
+              - alias: whole show already watched, fall back to shuffle
+                if:
+                  - condition: template
+                    value_template: "{{ video_show_in_order and not is_state(plexplayer, 'playing') }}"
+                then:
+                  - action: media_player.play_media
+                    continue_on_error: true
+                    data:
+                      media_content_type: episode
+                      media_content_id: "plex://{{ dict(video_request, shuffle=true) | to_json }}"
+                    target:
+                      entity_id: !input plexplayer
+                  - wait_template: "{{ is_state(plexplayer, 'playing') }}"
+                    timeout:
+                      seconds: 20
+              - if:
+                  - condition: template
+                    value_template: "{{ not is_state(plexplayer, 'playing') }}"
+                then:
+                  - action: persistent_notification.create
+                    data:
+                      notification_id: tagtuner_video_{{ device_attr(tuner_device_id, "name") }}
+                      title: TagTuner video
+                      message: >-
+                        Plex did not start playing this tag. Check the library name and title against Plex,
+                        and the automation trace for the error.
+
+                        Tag: {{ uri }}
+        alias: tag_scanned video
 
       - conditions:
           - condition: template
@@ -291,6 +487,16 @@ actions:
           - condition: template
             value_template: '{{ action == "tagScanned" and source != "" }}'
         sequence:
+          - alias: one source at a time
+            if:
+              - condition: template
+                value_template: >-
+                  {{ video_enabled and is_state(appletv, 'playing')
+                  and is_state_attr(appletv, 'app_name', plex_app_name) }}
+            then:
+              - action: media_player.media_pause
+                target:
+                  entity_id: !input appletv
           - parallel:
               - sequence:
                   - condition: template
@@ -411,6 +617,43 @@ actions:
             target:
               entity_id: !input httpplayer
         alias: tag_scanned new source
+
+      - conditions:
+          - condition: template
+            value_template: '{{ video_current and action in ("clickSingle", "trackNext", "trackPrevious", "volumeUp", "volumeDown") }}'
+        sequence:
+          - choose:
+              - conditions:
+                  - condition: template
+                    value_template: '{{ action == "clickSingle" }}'
+                sequence:
+                  - action: media_player.media_play_pause
+                    target:
+                      entity_id: !input appletv
+              - conditions:
+                  - condition: template
+                    value_template: '{{ action in ("trackNext", "trackPrevious") and appletv_remote != "" }}'
+                sequence:
+                  - action: remote.send_command
+                    data:
+                      command: "{%if action == 'trackNext' %}skip_forward{%else%}skip_backward{%endif%}"
+                    target:
+                      entity_id: "{{ appletv_remote }}"
+              - conditions:
+                  - condition: template
+                    value_template: '{{ action == "volumeUp" }}'
+                sequence:
+                  - action: media_player.volume_up
+                    target:
+                      entity_id: !input appletv
+              - conditions:
+                  - condition: template
+                    value_template: '{{ action == "volumeDown" }}'
+                sequence:
+                  - action: media_player.volume_down
+                    target:
+                      entity_id: !input appletv
+        alias: video controls
 
       - conditions:
           - condition: template
