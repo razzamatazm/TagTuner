@@ -414,63 +414,28 @@ actions:
 
       - conditions:
           - condition: template
-            value_template: '{{ action == "clickTriple" }}'
-        sequence:
-          - action: media_player.media_previous_track
-            target:
-              entity_id: !input httpplayer
-        alias: clickTriple
-      - conditions:
-          - condition: template
-            value_template: '{{ action == "clickDouble" }}'
+            value_template: '{{ action == "clickSingle" }}'
         sequence:
           - action: media_player.media_play_pause
             target:
               entity_id: !input httpplayer
-        alias: clickDouble
-      - conditions:
-          - condition: template
-            value_template: '{{ action == "clickSingle" }}'
-        sequence:
-          - if:
-              - condition: state
-                entity_id: !input httpplayer
-                state:
-                  - playing
-            then:
-              - action: media_player.media_next_track
-                target:
-                  entity_id: !input httpplayer
-                data: {}
-            else:
-              - action: media_player.media_play
-                metadata: {}
-                target:
-                  entity_id: !input httpplayer
-                data: {}
         alias: clickSingle
       - conditions:
           - condition: template
-            value_template: '{{ action == "clickLong" }}'
+            value_template: '{{ action == "trackNext" }}'
         sequence:
-          - if:
-              - condition: state
-                entity_id: !input httpplayer
-                attribute: is_volume_muted
-                state: 1
-            then:
-              - action: media_player.volume_mute
-                target:
-                  entity_id: !input httpplayer
-                data:
-                  is_volume_muted: false
-            else:
-              - action: media_player.volume_mute
-                target:
-                  entity_id: !input httpplayer
-                data:
-                  is_volume_muted: true
-        alias: clickLong
+          - action: media_player.media_next_track
+            target:
+              entity_id: !input httpplayer
+        alias: trackNext
+      - conditions:
+          - condition: template
+            value_template: '{{ action == "trackPrevious" }}'
+        sequence:
+          - action: media_player.media_previous_track
+            target:
+              entity_id: !input httpplayer
+        alias: trackPrevious
       - conditions:
           - condition: state
             entity_id: !input httpplayer

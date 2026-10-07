@@ -64,6 +64,8 @@ event:
       - clickSingle
       - volumeUp
       - volumeDown
+      - trackNext
+      - trackPrevious
       - tagRemoved
       - tagScanned
 

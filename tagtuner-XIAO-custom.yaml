@@ -64,6 +64,17 @@ esp32_ble_tracker:
 bluetooth_proxy:
   active: false
 
+globals:
+  # set when the knob turns while the button is held, so the release
+  # doesn't also fire a click
+  - id: knob_turned_while_held
+    type: bool
+    initial_value: 'false'
+  # last track skip, to rate-limit fast knob spins
+  - id: last_skip_ms
+    type: uint32_t
+    initial_value: '0'
+
 binary_sensor:
   - platform: gpio
     id: toggle
@@ -73,6 +84,10 @@ binary_sensor:
       mode:
         input: true
         pullup: true
+    on_press:
+      - globals.set:
+          id: knob_turned_while_held
+          value: 'false'
     on_multi_click:
     - timing:
         - ON for at most 1s
@@ -81,64 +96,32 @@ binary_sensor:
         - OFF for at most 0.25s
         - ON for at most 1s
       then:
-        - script.execute: led_blink
-        - text_sensor.template.publish:
-            id: status
-            state: "clickTriple"
         - script.execute:
-            id: tagtuner_event
+            id: click_event
             action: "clickTriple"
-            uid: ""
-            uri: ""
-            artist: ""
-            playlist: ""
     - timing:
         - ON for at most 1s
         - OFF for at most 0.25s
         - ON for at most 1s
         - OFF for at least 0.25s
       then:
-        - script.execute: led_blink
-        - text_sensor.template.publish:
-            id: status
-            state: "clickDouble"
         - script.execute:
-            id: tagtuner_event
+            id: click_event
             action: "clickDouble"
-            uid: ""
-            uri: ""
-            artist: ""
-            playlist: ""
     - timing:
         - ON for 0.5s to 2s
         - OFF for at least 50ms
       then:
-        - script.execute: led_blink
-        - text_sensor.template.publish:
-            id: status
-            state: "clickLong"
         - script.execute:
-            id: tagtuner_event
+            id: click_event
             action: "clickLong"
-            uid: ""
-            uri: ""
-            artist: ""
-            playlist: ""
     - timing:
         - ON for at most 0.5s
         - OFF for at least 260ms
       then:
-        - script.execute: led_blink
-        - text_sensor.template.publish:
-            id: status
-            state: "clickSingle"
         - script.execute:
-            id: tagtuner_event
+            id: click_event
             action: "clickSingle"
-            uid: ""
-            uri: ""
-            artist: ""
-            playlist: ""
 
 output:
   - platform: gpio
@@ -161,6 +144,67 @@ light:
               duration: 50ms
 
 script:
+  - id: click_event
+    parameters:
+      action: string
+    then:
+    - if:
+        condition:
+          lambda: 'return !id(knob_turned_while_held);'
+        then:
+          - script.execute: led_blink
+          - text_sensor.template.publish:
+              id: status
+              state: !lambda return action;
+          - script.execute:
+              id: tagtuner_event
+              action: !lambda return action;
+              uid: ""
+              uri: ""
+              artist: ""
+              playlist: ""
+  # held knob turns adjust volume, plain turns skip tracks
+  - id: knob_event
+    parameters:
+      clockwise: bool
+    then:
+    - if:
+        condition:
+          binary_sensor.is_on: toggle
+        then:
+          - globals.set:
+              id: knob_turned_while_held
+              value: 'true'
+          - text_sensor.template.publish:
+              id: status
+              state: !lambda 'return clockwise ? "Volume up" : "Volume down";'
+          - script.execute:
+              id: tagtuner_event
+              action: !lambda 'return clockwise ? "volumeUp" : "volumeDown";'
+              uid: ""
+              uri: ""
+              artist: ""
+              playlist: ""
+          - script.execute: led_blink
+        else:
+          - if:
+              condition:
+                lambda: 'return millis() - id(last_skip_ms) >= 400;'
+              then:
+                - globals.set:
+                    id: last_skip_ms
+                    value: !lambda return millis();
+                - text_sensor.template.publish:
+                    id: status
+                    state: !lambda 'return clockwise ? "Next track" : "Previous track";'
+                - script.execute:
+                    id: tagtuner_event
+                    action: !lambda 'return clockwise ? "trackNext" : "trackPrevious";'
+                    uid: ""
+                    uri: ""
+                    artist: ""
+                    playlist: ""
+                - script.execute: led_blink
   - id: led_blink
     then:
     - light.turn_off: led1
@@ -205,26 +249,10 @@ sensor:
     resolution: 2
     restore_mode: ALWAYS_ZERO
     on_clockwise:
-      - text_sensor.template.publish:
-          id: status
-          state: "Volume up"
       - script.execute:
-          id: tagtuner_event
-          action: "volumeUp"
-          uid: ""
-          uri: ""
-          artist: ""
-          playlist: ""
-      - script.execute: led_blink
+          id: knob_event
+          clockwise: true
     on_anticlockwise:
-      - text_sensor.template.publish:
-          id: status
-          state: "Volume down"
       - script.execute:
-          id: tagtuner_event
-          action: "volumeDown"
-          uid: ""
-          uri: ""
-          artist: ""
-          playlist: ""
-      - script.execute: led_blink
+          id: knob_event
+          clockwise: false
