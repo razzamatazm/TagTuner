@@ -67,6 +67,15 @@ blueprint:
               max: 10
               step: 0.5
               unit_of_measurement: s
+        plex_command:
+          name: Plex rest_command
+          description: >-
+            Needed for /shuffle tags, which play a random episode. A rest_command
+            that calls your Plex server with a `path` variable, see README. Leave
+            empty and /shuffle tags play the next episode instead.
+          default: ""
+          selector:
+            text:
     options:
       name: Additional settings
       collapsed: true
@@ -226,6 +235,12 @@ variables:
       {{ device_entities(device_id(appletv)) | select('match', 'remote\.') | first | default('') }}
     {%endif%}
   appletv_in_infuse: "{{ video_enabled and 'infuse' in (state_attr(appletv, 'app_name') or '')|lower }}"
+  plex_command: !input plex_command
+  video_mode: >-
+    {%if uri[-8:] == '/shuffle' %}shuffle{%elif uri[-5:] == '/open' %}open{%else%}play{%endif%}
+  video_link: >-
+    {%if video_mode == 'shuffle' %}{%set link = uri[0:-8] %}{%elif video_mode == 'open' %}{%set link = uri[0:-5] %}{%else%}{%set link = uri %}{%endif%}
+    {{ link.split('?')[0] }}
 
 triggers:
   - trigger: event
@@ -297,6 +312,72 @@ actions:
                   - action: media_player.media_pause
                     target:
                       entity_id: !input httpplayer
+              - variables:
+                  play_link: "{{ video_link }}"
+              - alias: pick a random episode from Plex
+                if:
+                  - condition: template
+                    value_template: >-
+                      {{ video_mode == 'shuffle' and plex_command != ''
+                      and video_link is match('^infuse://series/[0-9]+$') }}
+                then:
+                  - alias: find the show by the title on the tag, match its TMDB id
+                    action: "{{ plex_command }}"
+                    data:
+                      path: >-
+                        /hubs/search?query={{ (trigger.event.data.artist | default(''))
+                        | regex_replace(' \(\d{4}\)$', '') | urlencode }}&limit=10&includeGuids=1
+                    response_variable: plex_search
+                    continue_on_error: true
+                  - variables:
+                      plex_show: >-
+                        {%set want = 'tmdb://' ~ video_link.split('/')[-1] %}
+                        {%set ns = namespace(show={}) %}
+                        {%if plex_search is defined and plex_search.status == 200 %}
+                          {%for hub in plex_search.content.MediaContainer.Hub | default([]) if hub.type == 'show' %}
+                            {%for m in hub.Metadata | default([]) %}
+                              {%if not ns.show and want in (m.Guid | default([]) | map(attribute='id') | list) %}
+                                {%set ns.show = {'key': m.ratingKey, 'count': m.leafCount | int(0)} %}
+                              {%endif%}
+                            {%endfor%}
+                          {%endfor%}
+                        {%endif%}
+                        {{ ns.show }}
+                  - if:
+                      - condition: template
+                        value_template: "{{ plex_show.count | default(0) > 0 }}"
+                    then:
+                      - action: "{{ plex_command }}"
+                        data:
+                          path: >-
+                            /library/metadata/{{ plex_show.key }}/allLeaves?X-Plex-Container-Start={{
+                            range(plex_show.count) | random }}&X-Plex-Container-Size=1
+                        response_variable: plex_episode
+                        continue_on_error: true
+                  - variables:
+                      play_link: >-
+                        {%set ep = (plex_episode.content.MediaContainer.Metadata | default([{}]))[0]
+                        if plex_episode is defined and plex_episode.status == 200 else {} %}
+                        {%if ep.index is defined and ep.parentIndex is defined %}
+                          {{ video_link }}-{{ ep.parentIndex }}-{{ ep.index }}
+                        {%else%}
+                          {{ video_link }}
+                        {%endif%}
+                  - if:
+                      - condition: template
+                        value_template: "{{ play_link == video_link }}"
+                    then:
+                      - action: persistent_notification.create
+                        data:
+                          notification_id: tagtuner_video_{{ device_attr(tuner_device_id, "name") }}
+                          title: TagTuner video
+                          message: >-
+                            Couldn't pick a random episode from Plex, playing the next episode instead.
+                            Plex is searched for the title on the tag
+                            ("{{ trigger.event.data.artist | default('') }}"), and the match must have
+                            TMDB id {{ video_link.split('/')[-1] }}. Rewrite the tag with the write script if the title is missing.
+
+                            Tag: {{ uri }}
               - alias: wake the Apple TV, CEC turns on the TV
                 if:
                   - condition: state
@@ -318,7 +399,7 @@ actions:
               - action: media_player.play_media
                 data:
                   media_content_type: url
-                  media_content_id: "{{ uri if '?play' in uri else uri ~ '?play' }}"
+                  media_content_id: "{{ play_link if video_mode == 'open' else play_link ~ '?play' }}"
                 target:
                   entity_id: !input appletv
               - alias: accept the Open in Infuse prompt
@@ -333,6 +414,9 @@ actions:
                       command: select
                     target:
                       entity_id: "{{ appletv_remote }}"
+              - alias: an /open tag only shows the item page
+                condition: template
+                value_template: "{{ video_mode != 'open' }}"
               - wait_template: "{{ is_state(appletv, 'playing') }}"
                 timeout:
                   seconds: 30

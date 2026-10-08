@@ -2,7 +2,9 @@ blueprint:
   name: TagTuner write Infuse video tag
   description: >-
     Builds an infuse:// tag for a movie, show or episode and writes it with
-    your TagTuner. Find the TMDB id in the address on themoviedb.org, e.g.
+    your TagTuner. Type a title and the script finds it in your Plex library
+    and reads its TMDB id. Without a Plex rest_command, enter the TMDB id
+    yourself: it's the number in the themoviedb.org address, e.g.
     themoviedb.org/tv/82728-bluey is 82728. Take any tag off the reader, run
     the script, then place the tag within 30 seconds. A tag left on the
     reader is skipped.
@@ -15,8 +17,22 @@ blueprint:
         device:
           filter:
             - integration: esphome
+    plex_command:
+      name: Plex rest_command
+      description: >-
+        Optional. A rest_command that calls your Plex server with a `path`
+        variable, see README. Lets the script look titles up in Plex.
+      default: ""
+      selector:
+        text:
 
 fields:
+  title:
+    name: Title
+    description: movie or show to look up in Plex
+    required: true
+    selector:
+      text:
   kind:
     name: Kind
     required: true
@@ -28,22 +44,12 @@ fields:
             value: movie
           - label: Whole show, next unwatched episode
             value: show
+          - label: Whole show, random episode
+            value: shuffle
+          - label: Whole show, open its page in Infuse
+            value: open
           - label: One episode
             value: episode
-  tmdb_id:
-    name: TMDB id
-    description: the number in the themoviedb.org address
-    required: true
-    selector:
-      number:
-        min: 1
-        max: 99999999
-        mode: box
-  title:
-    name: Title
-    description: shown on the reader's device page, not used for playback
-    selector:
-      text:
   season:
     name: Season
     description: one episode only
@@ -60,17 +66,18 @@ fields:
         min: 1
         max: 1000
         mode: box
+  tmdb_id:
+    name: TMDB id
+    description: skips the Plex lookup, for titles not in Plex or when the lookup picks the wrong one
+    selector:
+      number:
+        min: 1
+        max: 99999999
+        mode: box
 
 variables:
   tuner_device_id: !input tuner_id
-  tag_request: >-
-    {%if kind == 'movie' %}
-      infuse://movie/{{ tmdb_id|int }}
-    {%elif kind == 'episode' %}
-      infuse://series/{{ tmdb_id|int }}-{{ season|int }}-{{ episode|int }}
-    {%else%}
-      infuse://series/{{ tmdb_id|int }}
-    {%endif%}
+  plex_command: !input plex_command
   text_playlist_uri: >-
     {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_uri') | first }}
   text_playlist_artist: >-
@@ -79,19 +86,89 @@ variables:
     {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_name_or_album_title') | first }}
   button_write_tag: >-
     {{ device_entities(tuner_device_id) | select('match', '^button\..*_write_tag') | first }}
+  notification_id: tagtuner_write_{{ device_attr(tuner_device_id, "name") }}
 
 sequence:
-  - condition: template
-    value_template: "{{ kind != 'episode' or (season|default(none) is not none and episode|default(none) is not none) }}"
-  - action: text.set_value
+  - if:
+      - condition: template
+        value_template: "{{ kind == 'episode' and (season|default(none) is none or episode|default(none) is none) }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: "{{ notification_id }}"
+          title: TagTuner video tag
+          message: One episode needs a season and an episode number. Nothing was written.
+      - stop: missing season or episode
+  - if:
+      - condition: template
+        value_template: "{{ tmdb_id|default(none) is none and plex_command != '' }}"
+    then:
+      - action: "{{ plex_command }}"
+        data:
+          path: /hubs/search?query={{ title|urlencode }}&limit=10&includeGuids=1
+        response_variable: plex_search
+        continue_on_error: true
+  - variables:
+      matches: >-
+        {%set want = 'movie' if kind == 'movie' else 'show' %}
+        {%set ns = namespace(found=[]) %}
+        {%if plex_search is defined and plex_search.status == 200 %}
+          {%for hub in plex_search.content.MediaContainer.Hub | default([]) if hub.type == want %}
+            {%for m in hub.Metadata | default([]) %}
+              {%set ids = m.Guid | default([]) | map(attribute='id') | select('match', 'tmdb://') | list %}
+              {%if ids %}
+                {%set ns.found = ns.found + [{'title': m.title, 'year': m.year | default(''), 'tmdb': ids[0][7:] | int}] %}
+              {%endif%}
+            {%endfor%}
+          {%endfor%}
+        {%endif%}
+        {{ ns.found }}
+      chosen: >-
+        {%if tmdb_id|default(none) is not none %}
+          {{ {'title': title, 'year': '', 'tmdb': tmdb_id | int} }}
+        {%elif matches %}
+          {{ matches[0] }}
+        {%else%}
+          {{ {} }}
+        {%endif%}
+  - if:
+      - condition: template
+        value_template: "{{ not chosen }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: "{{ notification_id }}"
+          title: TagTuner video tag
+          message: >-
+            {%if plex_command == '' %}
+            No TMDB id given and no Plex rest_command set, so "{{ title }}" can't be looked up. Nothing was written.
+            {%else%}
+            No {{ 'movie' if kind == 'movie' else 'show' }} matching "{{ title }}" with a TMDB id in Plex. Nothing was written.
+            {%endif%}
+      - stop: nothing to write
+  - variables:
+      tag_request: >-
+        {%if kind == 'movie' %}
+          infuse://movie/{{ chosen.tmdb }}
+        {%elif kind == 'episode' %}
+          infuse://series/{{ chosen.tmdb }}-{{ season|int }}-{{ episode|int }}
+        {%elif kind == 'shuffle' %}
+          infuse://series/{{ chosen.tmdb }}/shuffle
+        {%elif kind == 'open' %}
+          infuse://series/{{ chosen.tmdb }}/open
+        {%else%}
+          infuse://series/{{ chosen.tmdb }}
+        {%endif%}
+  - alias: the title is stored on the tag, /shuffle tags search Plex for it
+    action: text.set_value
     data:
-      value: "{{ title|default('', true)|truncate(50, true, '…') }}"
+      value: "{{ chosen.title|truncate(50, true, '…') }}"
     target:
       entity_id: "{{ text_playlist_artist }}"
   - action: text.set_value
     data:
       value: >-
-        {%if kind == 'episode' %}S{{ season|int }}E{{ episode|int }}{%else%}{{ title|default('', true)|truncate(100, true, '…') }}{%endif%}
+        {%if kind == 'episode' %}S{{ season|int }}E{{ episode|int }}{%else%}{{ chosen.title|truncate(100, true, '…') }}{%endif%}
     target:
       entity_id: "{{ text_playlist_name }}"
   - action: text.set_value
@@ -102,4 +179,18 @@ sequence:
   - action: button.press
     target:
       entity_id: "{{ button_write_tag }}"
+  - action: persistent_notification.create
+    data:
+      notification_id: "{{ notification_id }}"
+      title: TagTuner video tag
+      message: >-
+        Writing {{ chosen.title }}{{ ' (' ~ chosen.year ~ ')' if chosen.year and chosen.year|string not in chosen.title }}
+        as {{ tag_request }}. Place the tag on the reader within 30 seconds.
+        {%if matches | length > 1 and tmdb_id|default(none) is none %}
+
+        Other matches, run again with their TMDB id if this is the wrong one:
+        {%for m in matches[1:] %}
+        - {{ m.title }}{{ ' (' ~ m.year ~ ')' if m.year and m.year|string not in m.title }}: {{ m.tmdb }}
+        {%endfor%}
+        {%endif%}
 mode: single
