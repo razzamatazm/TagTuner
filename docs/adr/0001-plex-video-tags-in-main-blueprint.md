@@ -4,7 +4,7 @@ Date: 2026-10-07
 
 ## Status
 
-Accepted
+Superseded in part by [ADR 2](0002-infuse-deep-links-for-video-tags.md): Plex playback replaced by Infuse deep links.
 
 ## Context
 

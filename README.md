@@ -169,34 +169,33 @@ The ladybug icon is your guide.
 
 ![AA29C1D0-BE96-452C-B2BF-FDD8AF05B9F1_1_102_a](https://github.com/user-attachments/assets/2aa49e88-7832-40c9-b8ea-dc481e9369fa)
 
-### Plex videos on Apple TV
-Tags can also start a Plex movie or show on an Apple TV. Music tags keep working as before.
+### Infuse videos on Apple TV
+Tags can also start a movie or show in Infuse on an Apple TV. Music tags keep working as before.
 
 Setup:
-1. Add the Home Assistant **Plex** and **Apple TV** integrations.
-2. On the Apple TV, open Plex, go to Settings > Remote Control and turn on **Advertise as Player**. With Plex open, check that a Plex media player for the Apple TV shows up in HA (press the Plex "Scan clients" button if not).
-3. In the TagTuner automation, open **Plex videos on Apple TV** and pick the Apple TV and its Plex player.
+1. Install Infuse on the Apple TV and add your library (e.g. your Plex server) so the titles show up in Infuse's library.
+2. Add the Home Assistant **Apple TV** integration.
+3. In the TagTuner automation, open **Infuse videos on Apple TV** and pick the Apple TV.
 
-Video tags hold `plexvideo://` followed by a Plex search in JSON. Library and titles must match Plex exactly.
+Video tags hold an Infuse link with the title's TMDB id, the number in its themoviedb.org address (themoviedb.org/tv/82728-bluey is 82728).
 
 | Tag | Plays |
 | --- | --- |
-| `plexvideo://{"library_name":"Movies","title":"Moana"}` | the movie, resuming where it stopped. Add `"year":2016` if two movies share a title |
-| `plexvideo://{"library_name":"TV Shows","show_name":"Bluey"}` | next unwatched episode, then keeps going. Random once everything is watched |
-| `plexvideo://{"library_name":"TV Shows","show_name":"Bluey","shuffle":true}` | random episodes |
-| `plexvideo://{"library_name":"TV Shows","show_name":"Bluey","season_number":1,"episode_number":3}` | that episode |
+| `infuse://movie/277834` | the movie |
+| `infuse://series/82728` | the next unwatched episode, same as Infuse's Play button |
+| `infuse://series/82728-1-3` | season 1 episode 3 |
 
 To write one, import [TagTunerWriteVideoTag.yaml](blueprints/TagTunerWriteVideoTag.yaml) as a script blueprint, create a script from it, run it, fill in the fields and place a tag on the reader within 30 seconds. Take the tag off the reader before running it: a tag already sitting there is skipped, for writing and erasing alike. You can also type the URI into the reader's Playlist URI box and press Write Tag.
 
+When a video tag is scanned, the Apple TV is woken if needed (HDMI-CEC turns the TV on), the link is opened, and Select is pressed to accept tvOS's "Open in Infuse" prompt. If nothing is playing after 30 seconds you get a Home Assistant notification.
+
 While a video tag is the last tag scanned:
 - click: play/pause
-- turn the knob: skip back/forward (Plex's own step)
+- turn the knob: skip back/forward
 - hold and turn: Apple TV volume (the volume limiter doesn't apply)
 - lift the tag: keeps playing
 - put the same tag back: resumes if paused
-- scan a music tag: pauses Plex and plays the music
-
-If the Apple TV is asleep it gets woken and Plex opened first, which can take a while. If Plex doesn't show up or won't play the title, you get a Home Assistant notification.
+- scan a music tag: pauses Infuse and plays the music
 
 ## How to get tags for TagTuner
 ### Upcycle tags you already have

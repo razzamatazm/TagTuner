@@ -38,8 +38,8 @@ blueprint:
           filter:
             - domain: media_player
     video:
-      name: Plex videos on Apple TV
-      description: Optional. Lets plexvideo:// tags play Plex movies and shows on an Apple TV. Leave empty and video tags are ignored.
+      name: Infuse videos on Apple TV
+      description: Optional. Lets infuse:// tags play movies and shows in Infuse on an Apple TV. Leave empty and video tags are ignored.
       collapsed: true
       input:
         appletv:
@@ -51,28 +51,21 @@ blueprint:
               filter:
                 - integration: apple_tv
                   domain: media_player
-        plexplayer:
-          name: Plex player on the Apple TV
-          description: Plex integration media player for the Plex app on this Apple TV. Open Plex on the Apple TV once so it shows up
-          default: ""
+        infuse_confirm:
+          name: Confirm Open in Infuse
+          description: press Select on the Apple TV to accept the Open in Infuse prompt
+          default: true
           selector:
-            entity:
-              filter:
-                - integration: plex
-                  domain: media_player
-        plex_app_name:
-          name: Plex app name
-          description: as listed in the Apple TV sources
-          default: Plex
-        video_timeout:
-          name: Startup timeout
-          description: seconds to wait for Plex to wake up on the Apple TV
-          default: 60
+            boolean:
+        infuse_confirm_delay:
+          name: Confirm delay
+          description: seconds between opening the link and pressing Select
+          default: 2
           selector:
             number:
-              min: 10
-              max: 180
-              step: 5
+              min: 0.5
+              max: 10
+              step: 0.5
               unit_of_measurement: s
     options:
       name: Additional settings
@@ -178,7 +171,7 @@ variables:
       {{ trigger.event.data.uri }}
     {%endif%}
   source: >-
-    {%if uri[0:12]=='plexvideo://' %}
+    {%if uri[0:9]=='infuse://' %}
       video
     {%elif uri[0:5]=='https' %}
       http
@@ -224,19 +217,15 @@ variables:
   default_volume_set: !input default_volume_set
   default_volume: !input default_volume
   appletv: !input appletv
-  plexplayer: !input plexplayer
-  plex_app_name: !input plex_app_name
-  video_timeout: !input video_timeout
-  video_enabled: "{{ appletv not in ('', none) and plexplayer not in ('', none) }}"
-  video_current: "{{ video_enabled and states(text_playlist_uri)[0:12] == 'plexvideo://' }}"
+  infuse_confirm: !input infuse_confirm
+  infuse_confirm_delay: !input infuse_confirm_delay
+  video_enabled: "{{ appletv not in ('', none) }}"
+  video_current: "{{ video_enabled and states(text_playlist_uri)[0:9] == 'infuse://' }}"
   appletv_remote: >-
     {%if video_enabled %}
       {{ device_entities(device_id(appletv)) | select('match', 'remote\.') | first | default('') }}
     {%endif%}
-  plex_scan_button: >-
-    {%if video_enabled %}
-      {{ integration_entities('plex') | select('match', 'button\..*scan_clients') | first | default('') }}
-    {%endif%}
+  appletv_in_infuse: "{{ video_enabled and 'infuse' in (state_attr(appletv, 'app_name') or '')|lower }}"
 
 triggers:
   - trigger: event
@@ -279,19 +268,10 @@ actions:
         sequence:
           - condition: template
             value_template: "{{ video_enabled }}"
-          - variables:
-              video_request: "{{ uri[12:] | from_json(default={}) }}"
-              video_show_in_order: >-
-                {{ 'show_name' in video_request
-                and 'season_number' not in video_request
-                and 'episode_number' not in video_request
-                and 'episode_name' not in video_request
-                and not video_request.get('shuffle', false) }}
-              video_content_type: "{%if 'show_name' in video_request %}episode{%else%}movie{%endif%}"
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ is_state(text_playlist_uri, uri) }}"
+                    value_template: "{{ is_state(text_playlist_uri, uri) and appletv_in_infuse }}"
                   - condition: state
                     entity_id: !input appletv
                     state:
@@ -317,98 +297,56 @@ actions:
                   - action: media_player.media_pause
                     target:
                       entity_id: !input httpplayer
-              - action: media_player.turn_on
-                target:
-                  entity_id: !input appletv
-              - if:
-                  - condition: template
-                    value_template: "{{ not is_state_attr(appletv, 'app_name', plex_app_name) }}"
+              - alias: wake the Apple TV, CEC turns on the TV
+                if:
+                  - condition: state
+                    entity_id: !input appletv
+                    state:
+                      - "off"
+                      - standby
+                      - unavailable
+                      - unknown
                 then:
-                  - action: media_player.select_source
-                    data:
-                      source: !input plex_app_name
+                  - action: media_player.turn_on
                     target:
                       entity_id: !input appletv
-                  - wait_template: "{{ is_state_attr(appletv, 'app_name', plex_app_name) }}"
+                  - wait_template: "{{ states(appletv) not in ('off', 'standby', 'unavailable', 'unknown') }}"
                     timeout:
                       seconds: 20
-              - alias: wait for the Plex player to show up
-                repeat:
-                  sequence:
-                    - if:
-                        - condition: template
-                          value_template: "{{ plex_scan_button != '' }}"
-                      then:
-                        - action: button.press
-                          target:
-                            entity_id: "{{ plex_scan_button }}"
-                    - wait_template: "{{ states(plexplayer) not in ('unavailable', 'unknown') }}"
-                      timeout:
-                        seconds: 6
-                  until:
-                    - condition: template
-                      value_template: >-
-                        {{ states(plexplayer) not in ('unavailable', 'unknown')
-                        or repeat.index * 6 >= video_timeout|int }}
-              - if:
-                  - condition: template
-                    value_template: "{{ states(plexplayer) in ('unavailable', 'unknown') }}"
-                then:
-                  - action: persistent_notification.create
-                    data:
-                      notification_id: tagtuner_video_{{ device_attr(tuner_device_id, "name") }}
-                      title: TagTuner video
-                      message: >-
-                        Plex did not show up on {{ state_attr(appletv, 'friendly_name') }} within {{ video_timeout }}s.
-                        Check that Plex is installed, signed in, and has Advertise as Player turned on.
-
-                        Tag: {{ uri }}
-                  - stop: Plex player unavailable
+                  - delay:
+                      seconds: 2
               - action: media_player.play_media
-                continue_on_error: true
                 data:
-                  media_content_type: "{{ video_content_type }}"
-                  media_content_id: >-
-                    {%if video_show_in_order %}
-                      plex://{{ {'library_name': video_request.library_name, 'show.title': video_request.show_name,
-                      'libtype': 'episode', 'unwatched': true, 'sort': 'originallyAvailableAt:asc',
-                      'maxresults': 1, 'continuous': true, 'resume': true} | to_json }}
-                    {%elif 'resume' in video_request or 'offset' in video_request %}
-                      plex://{{ video_request | to_json }}
-                    {%else%}
-                      plex://{{ dict(video_request, resume=true) | to_json }}
-                    {%endif%}
+                  media_content_type: url
+                  media_content_id: "{{ uri if '?play' in uri else uri ~ '?play' }}"
                 target:
-                  entity_id: !input plexplayer
-              - wait_template: "{{ is_state(plexplayer, 'playing') }}"
-                timeout:
-                  seconds: 20
-              - alias: whole show already watched, fall back to shuffle
+                  entity_id: !input appletv
+              - alias: accept the Open in Infuse prompt
                 if:
                   - condition: template
-                    value_template: "{{ video_show_in_order and not is_state(plexplayer, 'playing') }}"
+                    value_template: "{{ infuse_confirm and appletv_remote != '' }}"
                 then:
-                  - action: media_player.play_media
-                    continue_on_error: true
+                  - delay:
+                      seconds: "{{ infuse_confirm_delay|float }}"
+                  - action: remote.send_command
                     data:
-                      media_content_type: episode
-                      media_content_id: "plex://{{ dict(video_request, shuffle=true) | to_json }}"
+                      command: select
                     target:
-                      entity_id: !input plexplayer
-                  - wait_template: "{{ is_state(plexplayer, 'playing') }}"
-                    timeout:
-                      seconds: 20
+                      entity_id: "{{ appletv_remote }}"
+              - wait_template: "{{ is_state(appletv, 'playing') }}"
+                timeout:
+                  seconds: 30
               - if:
                   - condition: template
-                    value_template: "{{ not is_state(plexplayer, 'playing') }}"
+                    value_template: "{{ not wait.completed }}"
                 then:
                   - action: persistent_notification.create
                     data:
                       notification_id: tagtuner_video_{{ device_attr(tuner_device_id, "name") }}
                       title: TagTuner video
                       message: >-
-                        Plex did not start playing this tag. Check the library name and title against Plex,
-                        and the automation trace for the error.
+                        {{ state_attr(appletv, 'friendly_name') }} did not start playing this tag within 30s.
+                        Check that the TMDB id on the tag matches an item in your Infuse library.
 
                         Tag: {{ uri }}
         alias: tag_scanned video
@@ -491,8 +429,7 @@ actions:
             if:
               - condition: template
                 value_template: >-
-                  {{ video_enabled and is_state(appletv, 'playing')
-                  and is_state_attr(appletv, 'app_name', plex_app_name) }}
+                  {{ appletv_in_infuse and is_state(appletv, 'playing') }}
             then:
               - action: media_player.media_pause
                 target:
