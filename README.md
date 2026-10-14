@@ -206,7 +206,7 @@ rest_command:
 
 #### Writing from the Plezy QR code with an iPhone
 1. Import [TagTunerScanVideoTag.yaml](blueprints/TagTunerScanVideoTag.yaml) as an automation blueprint, create an automation from it and pick the write script. Keep the webhook ID or change it.
-2. Open [TagTuner Plezy tag.shortcut](blueprints/TagTuner%20Plezy%20tag.shortcut) on the iPhone. When asked, enter your Home Assistant address on the home network followed by `/api/webhook/<webhook ID>`, for example `http://homeassistant.local:8123/api/webhook/tagtuner_write_video`.
+2. Open [TagTuner Plezy tag.shortcut](blueprints/TagTuner%20Plezy%20tag.shortcut) on the iPhone. Its first action holds the webhook URL, `http://homeassistant.local:8123/api/webhook/tagtuner_write_video`. Edit it if your Home Assistant has a different address on the home network or you changed the webhook ID.
 3. On the Apple TV, open **Show watch link** for a title. Run the shortcut, scan the QR code, choose Next episode or Shuffle, and place a tag on the reader within 30 seconds.
 
 The webhook only answers on the home network, so the phone has to be on Wi-Fi at home.
