@@ -400,6 +400,20 @@ actions:
                       seconds: 20
                   - delay:
                       seconds: 2
+                else:
+                  - alias: an asleep Apple TV can still report paused, and then refuses to open links
+                    if:
+                      - condition: not
+                        conditions:
+                          - condition: state
+                            entity_id: !input appletv
+                            state: playing
+                    then:
+                      - action: media_player.turn_on
+                        target:
+                          entity_id: !input appletv
+                      - delay:
+                          seconds: 1
               - action: media_player.play_media
                 data:
                   media_content_type: url
