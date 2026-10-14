@@ -4,7 +4,7 @@ Date: 2026-10-08
 
 ## Status
 
-Accepted. Supersedes the playback path in [ADR 1](0001-plex-video-tags-in-main-blueprint.md).
+Accepted. Supersedes the playback path in [ADR 1](0001-plex-video-tags-in-main-blueprint.md). Superseded for new tags by [ADR 3](0003-plezy-watch-links-for-video-tags.md); infuse:// tags still play.
 
 ## Context
 

@@ -1,0 +1,41 @@
+blueprint:
+  name: TagTuner write video tag from a phone
+  description: >-
+    Lets the "TagTuner Plezy tag" iPhone shortcut write tags. The shortcut
+    scans the QR code in Plezy's "Show watch link" dialog and posts the link
+    here, and this runs your TagTuner write Plezy video tag script. Only
+    devices on your home network can call it.
+  domain: automation
+  input:
+    webhook_id:
+      name: Webhook ID
+      description: the last part of the URL the shortcut posts to, /api/webhook/<id>
+      default: tagtuner_write_video
+      selector:
+        text:
+    write_script:
+      name: Write script
+      description: a script made from the TagTuner write Plezy video tag blueprint
+      selector:
+        entity:
+          filter:
+            - domain: script
+
+triggers:
+  - trigger: webhook
+    webhook_id: !input webhook_id
+    allowed_methods:
+      - POST
+    local_only: true
+
+variables:
+  write_script: !input write_script
+
+actions:
+  - action: "{{ write_script }}"
+    data:
+      link: "{{ trigger.json.link | default('') }}"
+      mode: "{{ trigger.json.mode | default('next') }}"
+      title: "{{ trigger.json.title | default('') }}"
+
+mode: single

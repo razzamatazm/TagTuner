@@ -38,8 +38,8 @@ blueprint:
           filter:
             - domain: media_player
     video:
-      name: Infuse videos on Apple TV
-      description: Optional. Lets infuse:// tags play movies and shows in Infuse on an Apple TV. Leave empty and video tags are ignored.
+      name: Videos on Apple TV
+      description: Optional. Lets plezy:// and infuse:// tags play movies and shows in Plezy or Infuse on an Apple TV. Leave empty and video tags are ignored.
       collapsed: true
       input:
         appletv:
@@ -53,7 +53,7 @@ blueprint:
                   domain: media_player
         infuse_confirm:
           name: Confirm Open in Infuse
-          description: press Select on the Apple TV to accept the Open in Infuse prompt
+          description: press Select on the Apple TV to accept the Open in Infuse prompt (infuse:// tags only)
           default: true
           selector:
             boolean:
@@ -70,7 +70,7 @@ blueprint:
         plex_command:
           name: Plex rest_command
           description: >-
-            Needed for /shuffle tags, which play a random episode. A rest_command
+            Needed for infuse:// /shuffle tags, which play a random episode. A rest_command
             that calls your Plex server with a `path` variable, see README. Leave
             empty and /shuffle tags play the next episode instead.
           default: ""
@@ -180,7 +180,7 @@ variables:
       {{ trigger.event.data.uri }}
     {%endif%}
   source: >-
-    {%if uri[0:9]=='infuse://' %}
+    {%if uri[0:9]=='infuse://' or uri[0:8]=='plezy://' %}
       video
     {%elif uri[0:5]=='https' %}
       http
@@ -229,12 +229,16 @@ variables:
   infuse_confirm: !input infuse_confirm
   infuse_confirm_delay: !input infuse_confirm_delay
   video_enabled: "{{ appletv not in ('', none) }}"
-  video_current: "{{ video_enabled and states(text_playlist_uri)[0:9] == 'infuse://' }}"
+  video_current: >-
+    {{ video_enabled and (states(text_playlist_uri)[0:9] == 'infuse://' or states(text_playlist_uri)[0:8] == 'plezy://') }}
   appletv_remote: >-
     {%if video_enabled %}
       {{ device_entities(device_id(appletv)) | select('match', 'remote\.') | first | default('') }}
     {%endif%}
-  appletv_in_infuse: "{{ video_enabled and 'infuse' in (state_attr(appletv, 'app_name') or '')|lower }}"
+  video_app: "{{ 'plezy' if uri[0:8] == 'plezy://' else 'infuse' }}"
+  appletv_in_video_app: >-
+    {%set app = (state_attr(appletv, 'app_name') or '')|lower %}
+    {{ video_enabled and ('infuse' in app or 'plezy' in app) }}
   plex_command: !input plex_command
   video_mode: >-
     {%if uri[-8:] == '/shuffle' %}shuffle{%elif uri[-5:] == '/open' %}open{%else%}play{%endif%}
@@ -286,7 +290,7 @@ actions:
           - choose:
               - conditions:
                   - condition: template
-                    value_template: "{{ is_state(text_playlist_uri, uri) and appletv_in_infuse }}"
+                    value_template: "{{ is_state(text_playlist_uri, uri) and appletv_in_video_app }}"
                   - condition: state
                     entity_id: !input appletv
                     state:
@@ -313,12 +317,12 @@ actions:
                     target:
                       entity_id: !input httpplayer
               - variables:
-                  play_link: "{{ video_link }}"
+                  play_link: "{{ uri if video_app == 'plezy' else video_link }}"
               - alias: pick a random episode from Plex
                 if:
                   - condition: template
                     value_template: >-
-                      {{ video_mode == 'shuffle' and plex_command != ''
+                      {{ video_app == 'infuse' and video_mode == 'shuffle' and plex_command != ''
                       and video_link is match('^infuse://series/[0-9]+$') }}
                 then:
                   - alias: find the show by the title on the tag, match its TMDB id
@@ -399,13 +403,14 @@ actions:
               - action: media_player.play_media
                 data:
                   media_content_type: url
-                  media_content_id: "{{ play_link if video_mode == 'open' else play_link ~ '?play' }}"
+                  media_content_id: >-
+                    {{ play_link if video_app == 'plezy' or video_mode == 'open' else play_link ~ '?play' }}
                 target:
                   entity_id: !input appletv
               - alias: accept the Open in Infuse prompt
                 if:
                   - condition: template
-                    value_template: "{{ infuse_confirm and appletv_remote != '' }}"
+                    value_template: "{{ video_app == 'infuse' and infuse_confirm and appletv_remote != '' }}"
                 then:
                   - delay:
                       seconds: "{{ infuse_confirm_delay|float }}"
@@ -416,10 +421,11 @@ actions:
                       entity_id: "{{ appletv_remote }}"
               - alias: an /open tag only shows the item page
                 condition: template
-                value_template: "{{ video_mode != 'open' }}"
-              - wait_template: "{{ is_state(appletv, 'playing') }}"
+                value_template: "{{ video_app == 'plezy' or video_mode != 'open' }}"
+              - alias: Plezy waits up to 20s for Plex servers on a cold start
+                wait_template: "{{ is_state(appletv, 'playing') }}"
                 timeout:
-                  seconds: 30
+                  seconds: 45
               - if:
                   - condition: template
                     value_template: "{{ not wait.completed }}"
@@ -429,8 +435,12 @@ actions:
                       notification_id: tagtuner_video_{{ device_attr(tuner_device_id, "name") }}
                       title: TagTuner video
                       message: >-
-                        {{ state_attr(appletv, 'friendly_name') }} did not start playing this tag within 30s.
+                        {{ state_attr(appletv, 'friendly_name') }} did not start playing this tag within 45s.
+                        {%if video_app == 'plezy' %}
+                        Check the TV for a Plezy message. Plezy ignores links it can't parse, so check the tag's link format too.
+                        {%else%}
                         Check that the TMDB id on the tag matches an item in your Infuse library.
+                        {%endif%}
 
                         Tag: {{ uri }}
         alias: tag_scanned video
@@ -515,7 +525,7 @@ actions:
             if:
               - condition: template
                 value_template: >-
-                  {{ appletv_in_infuse and is_state(appletv, 'playing') }}
+                  {{ appletv_in_video_app and is_state(appletv, 'playing') }}
             then:
               - action: media_player.media_pause
                 target:

@@ -1,13 +1,12 @@
 blueprint:
-  name: TagTuner write Infuse video tag
+  name: TagTuner write Plezy video tag
   description: >-
-    Builds an infuse:// tag for a movie, show or episode and writes it with
-    your TagTuner. Type a title and the script finds it in your Plex library
-    and reads its TMDB id. Without a Plex rest_command, enter the TMDB id
-    yourself: it's the number in the themoviedb.org address, e.g.
-    themoviedb.org/tv/82728-bluey is 82728. Take any tag off the reader, run
-    the script, then place the tag within 30 seconds. A tag left on the
-    reader is skipped.
+    Writes a plezy://watch tag for a Plex show or movie with your TagTuner.
+    Paste the link from Plezy's "Show watch link" dialog (or scan its QR code
+    with the TagTuner iPhone shortcut, see README), or type a title and the
+    script finds it in your Plex library. Take any tag off the reader, run the
+    script, then place the tag within 30 seconds. A tag left on the reader is
+    skipped.
   domain: script
   input:
     tuner_id:
@@ -21,59 +20,34 @@ blueprint:
       name: Plex rest_command
       description: >-
         Optional. A rest_command that calls your Plex server with a `path`
-        variable, see README. Lets the script look titles up in Plex.
+        variable, see README. Lets the script find titles in Plex and label
+        tags written from a link.
       default: ""
       selector:
         text:
 
 fields:
-  title:
-    name: Title
-    description: movie or show to look up in Plex
-    required: true
+  link:
+    name: Watch link
+    description: plezy://watch?... from Plezy's "Show watch link" dialog
     selector:
       text:
-  kind:
-    name: Kind
-    required: true
-    default: show
+  title:
+    name: Title
+    description: show or movie to look up in Plex when there's no link; with a link, the label stored on the tag
+    selector:
+      text:
+  mode:
+    name: Play mode
+    description: shows only, movies always resume
+    default: next
     selector:
       select:
         options:
-          - label: Movie
-            value: movie
-          - label: Whole show, next unwatched episode
-            value: show
-          - label: Whole show, random episode
+          - label: Next episode (On Deck, resumes)
+            value: next
+          - label: Shuffle the whole show
             value: shuffle
-          - label: Whole show, open its page in Infuse
-            value: open
-          - label: One episode
-            value: episode
-  season:
-    name: Season
-    description: one episode only
-    selector:
-      number:
-        min: 0
-        max: 100
-        mode: box
-  episode:
-    name: Episode
-    description: one episode only
-    selector:
-      number:
-        min: 1
-        max: 1000
-        mode: box
-  tmdb_id:
-    name: TMDB id
-    description: skips the Plex lookup, for titles not in Plex or when the lookup picks the wrong one
-    selector:
-      number:
-        min: 1
-        max: 99999999
-        mode: box
 
 variables:
   tuner_device_id: !input tuner_id
@@ -87,45 +61,74 @@ variables:
   button_write_tag: >-
     {{ device_entities(tuner_device_id) | select('match', '^button\..*_write_tag') | first }}
   notification_id: tagtuner_write_{{ device_attr(tuner_device_id, "name") }}
+  given_link: "{{ (link | default('') | trim) | regex_replace('%2[Ff]', '/') }}"
+  given_title: "{{ title | default('') | trim }}"
+  shuffle: "{{ (mode | default('next') | lower) == 'shuffle' }}"
+  link_plex: "{{ given_link | regex_findall('[?&]plex=([^&#]*)') }}"
+  link_id: "{{ given_link | regex_findall('[?&]id=([^&#]*)') }}"
+  link_server: "{{ given_link | regex_findall('[?&]server=([^&#]*)') }}"
 
 sequence:
+  - variables:
+      problem: >-
+        {%if given_link == '' and given_title == '' %}
+          Give a watch link or a title.
+        {%elif given_link == '' and plex_command == '' %}
+          No watch link given and no Plex rest_command set, so "{{ given_title }}" can't be looked up.
+        {%elif given_link != '' and given_link[0:14]|lower != 'plezy://watch?' %}
+          "{{ given_link }}" isn't a Plezy watch link. It should start with plezy://watch?
+        {%elif given_link != '' and (link_plex | length) + (link_id | length) != 1 %}
+          The link needs exactly one plex= or id=.
+        {%elif link_plex and link_plex[0] is not match('^(show|movie)/[0-9a-f]+$') %}
+          Watch links name a whole show or a movie, not "{{ link_plex[0] }}".
+        {%elif link_id and link_id[0] is not match('^[0-9]+$') %}
+          "{{ link_id[0] }}" isn't a Plex rating key.
+        {%endif%}
   - if:
       - condition: template
-        value_template: "{{ kind == 'episode' and (season|default(none) is none or episode|default(none) is none) }}"
+        value_template: "{{ problem | trim != '' }}"
     then:
       - action: persistent_notification.create
         data:
           notification_id: "{{ notification_id }}"
           title: TagTuner video tag
-          message: One episode needs a season and an episode number. Nothing was written.
-      - stop: missing season or episode
-  - if:
+          message: "{{ problem | trim }} Nothing was written."
+      - stop: bad input
+  - alias: look the title up in Plex, by GUID for a link, by search for a title
+    if:
       - condition: template
-        value_template: "{{ tmdb_id|default(none) is none and plex_command != '' }}"
+        value_template: >-
+          {{ plex_command != '' and ((given_link == '') or (link_plex and given_title == '')) }}
     then:
       - action: "{{ plex_command }}"
         data:
-          path: /hubs/search?query={{ title|urlencode }}&limit=10&includeGuids=1
-        response_variable: plex_search
+          path: >-
+            {%if given_link == '' %}
+              /hubs/search?query={{ given_title | urlencode }}&limit=10
+            {%else%}
+              /library/all?guid={{ ('plex://' ~ link_plex[0]) | urlencode }}&X-Plex-Container-Size=1
+            {%endif%}
+        response_variable: plex_result
         continue_on_error: true
   - variables:
       matches: >-
-        {%set want = 'movie' if kind == 'movie' else 'show' %}
-        {%set ns = namespace(found=[]) %}
-        {%if plex_search is defined and plex_search.status == 200 %}
-          {%for hub in plex_search.content.MediaContainer.Hub | default([]) if hub.type == want %}
-            {%for m in hub.Metadata | default([]) %}
-              {%set ids = m.Guid | default([]) | map(attribute='id') | select('match', 'tmdb://') | list %}
-              {%if ids %}
-                {%set ns.found = ns.found + [{'title': m.title, 'year': m.year | default(''), 'tmdb': ids[0][7:] | int}] %}
-              {%endif%}
-            {%endfor%}
+        {%set ns = namespace(found=[], items=[]) %}
+        {%if plex_result is defined and plex_result.status == 200 %}
+          {%set mc = plex_result.content.MediaContainer %}
+          {%set ns.items = mc.Metadata | default([]) %}
+          {%for hub in mc.Hub | default([]) if hub.type in ('show', 'movie') %}
+            {%set ns.items = ns.items + hub.Metadata | default([]) %}
+          {%endfor%}
+          {%for m in ns.items if (m.guid | default('')) is match('^plex://(show|movie)/') %}
+            {%set ns.found = ns.found + [{'title': m.title, 'year': m.year | default(''), 'guid': m.guid[7:]}] %}
           {%endfor%}
         {%endif%}
         {{ ns.found }}
       chosen: >-
-        {%if tmdb_id|default(none) is not none %}
-          {{ {'title': title, 'year': '', 'tmdb': tmdb_id | int} }}
+        {%if given_link != '' %}
+          {%set found = matches[0] if matches else {} %}
+          {{ {'title': given_title or found.title | default(''), 'year': found.year | default(''),
+              'guid': link_plex[0] if link_plex else ''} }}
         {%elif matches %}
           {{ matches[0] }}
         {%else%}
@@ -140,35 +143,27 @@ sequence:
           notification_id: "{{ notification_id }}"
           title: TagTuner video tag
           message: >-
-            {%if plex_command == '' %}
-            No TMDB id given and no Plex rest_command set, so "{{ title }}" can't be looked up. Nothing was written.
-            {%else%}
-            No {{ 'movie' if kind == 'movie' else 'show' }} matching "{{ title }}" with a TMDB id in Plex. Nothing was written.
-            {%endif%}
+            No show or movie matching "{{ given_title }}" with a Plex GUID. Use the
+            watch link from Plezy instead. Nothing was written.
       - stop: nothing to write
   - variables:
       tag_request: >-
-        {%if kind == 'movie' %}
-          infuse://movie/{{ chosen.tmdb }}
-        {%elif kind == 'episode' %}
-          infuse://series/{{ chosen.tmdb }}-{{ season|int }}-{{ episode|int }}
-        {%elif kind == 'shuffle' %}
-          infuse://series/{{ chosen.tmdb }}/shuffle
-        {%elif kind == 'open' %}
-          infuse://series/{{ chosen.tmdb }}/open
+        {%if chosen.guid %}
+          {%set base = 'plezy://watch?plex=' ~ chosen.guid %}
         {%else%}
-          infuse://series/{{ chosen.tmdb }}
+          {%set base = 'plezy://watch?id=' ~ link_id[0] ~ ('&server=' ~ link_server[0] if link_server else '') %}
         {%endif%}
-  - alias: the title is stored on the tag, /shuffle tags search Plex for it
+        {{ base ~ ('&mode=shuffle' if shuffle and chosen.guid[0:6] != 'movie/' else '') }}
+  - alias: the title on the tag is a label for people, playback only uses the link
     action: text.set_value
     data:
-      value: "{{ chosen.title|truncate(50, true, '…') }}"
+      value: "{{ chosen.title | truncate(20, true, '…') }}"
     target:
       entity_id: "{{ text_playlist_artist }}"
-  - action: text.set_value
+  - alias: left empty, a 20 character label and a shuffle link just fit an NTAG213
+    action: text.set_value
     data:
-      value: >-
-        {%if kind == 'episode' %}S{{ season|int }}E{{ episode|int }}{%else%}{{ chosen.title|truncate(100, true, '…') }}{%endif%}
+      value: ""
     target:
       entity_id: "{{ text_playlist_name }}"
   - action: text.set_value
@@ -184,13 +179,13 @@ sequence:
       notification_id: "{{ notification_id }}"
       title: TagTuner video tag
       message: >-
-        Writing {{ chosen.title }}{{ ' (' ~ chosen.year ~ ')' if chosen.year and chosen.year|string not in chosen.title }}
+        Writing {{ chosen.title or 'the link' }}{{ ' (' ~ chosen.year ~ ')' if chosen.year and chosen.year|string not in chosen.title }}
         as {{ tag_request }}. Place the tag on the reader within 30 seconds.
-        {%if matches | length > 1 and tmdb_id|default(none) is none %}
+        {%if given_link == '' and matches | length > 1 %}
 
-        Other matches, run again with their TMDB id if this is the wrong one:
+        Other matches, run again with their Plezy watch link if this is the wrong one:
         {%for m in matches[1:] %}
-        - {{ m.title }}{{ ' (' ~ m.year ~ ')' if m.year and m.year|string not in m.title }}: {{ m.tmdb }}
+        - {{ m.title }}{{ ' (' ~ m.year ~ ')' if m.year and m.year|string not in m.title }}
         {%endfor%}
         {%endif%}
 mode: single

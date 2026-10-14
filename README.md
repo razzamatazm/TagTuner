@@ -169,25 +169,50 @@ The ladybug icon is your guide.
 
 ![AA29C1D0-BE96-452C-B2BF-FDD8AF05B9F1_1_102_a](https://github.com/user-attachments/assets/2aa49e88-7832-40c9-b8ea-dc481e9369fa)
 
-### Infuse videos on Apple TV
-Tags can also start a movie or show in Infuse on an Apple TV. Music tags keep working as before.
+### Videos on Apple TV
+Tags can also start a Plex movie or show on an Apple TV through [Plezy](https://github.com/edde746/plezy). Music tags keep working as before.
+
+Watch links need a Plezy build with `plezy://watch` support (edde746/plezy#2681, not in the App Store build yet).
 
 Setup:
-1. Install Infuse on the Apple TV and add your library (e.g. your Plex server) so the titles show up in Infuse's library.
-2. Add the Home Assistant **Apple TV** integration.
-3. In the TagTuner automation, open **Infuse videos on Apple TV** and pick the Apple TV.
+1. Add the Home Assistant **Apple TV** integration.
+2. In the TagTuner automation, open **Videos on Apple TV** and pick the Apple TV.
+3. Open one watch link on the Apple TV by hand and accept tvOS's "Open in Plezy?" prompt. It's only asked the first time.
 
-Video tags hold an Infuse link with the title's TMDB id, the number in its themoviedb.org address (themoviedb.org/tv/82728-bluey is 82728).
+Video tags hold a Plezy watch link:
 
 | Tag | Plays |
 | --- | --- |
-| `infuse://movie/277834` | the movie |
-| `infuse://series/82728` | the next unwatched episode, same as Infuse's Play button |
-| `infuse://series/82728-1-3` | season 1 episode 3 |
+| `plezy://watch?plex=show/<hash>` | the On Deck episode of the show, or season 1 episode 1 if nothing is On Deck |
+| `plezy://watch?plex=show/<hash>&mode=shuffle` | the whole show on shuffle |
+| `plezy://watch?plex=movie/<hash>` | the movie, resumed |
+| `plezy://watch?id=<ratingKey>&server=<machineIdentifier>` | a title without a Plex GUID, like home videos |
 
-To write one, import [TagTunerWriteVideoTag.yaml](blueprints/TagTunerWriteVideoTag.yaml) as a script blueprint, create a script from it, run it, fill in the fields and place a tag on the reader within 30 seconds. Take the tag off the reader before running it: a tag already sitting there is skipped, for writing and erasing alike. You can also type the URI into the reader's Playlist URI box and press Write Tag.
+`<hash>` is the title's Plex GUID without `plex://`. Long-press a show or movie in Plezy and choose **Show watch link** to get it as a QR code.
 
-When a video tag is scanned, the Apple TV is woken if needed (HDMI-CEC turns the TV on), the link is opened, and Select is pressed to accept tvOS's "Open in Infuse" prompt. If nothing is playing after 30 seconds you get a Home Assistant notification.
+#### Writing video tags
+Import [TagTunerWriteVideoTag.yaml](blueprints/TagTunerWriteVideoTag.yaml) as a script blueprint and create a script from it. Run it with either a watch link or a title, pick Next episode or Shuffle, and place a tag on the reader within 30 seconds. Take the tag off the reader before running it: a tag already sitting there is skipped, for writing and erasing alike.
+
+With a Plex rest_command the script finds titles by name and labels tags written from a link with the title. Add this to `configuration.yaml` (the token is your [X-Plex-Token](https://support.plex.tv/articles/204059436-finding-an-authentication-token-x-plex-token/)) and pick `rest_command.tagtuner_plex` in the script:
+
+```yaml
+rest_command:
+  tagtuner_plex:
+    url: "http://<plex-server-ip>:32400{{ path }}"
+    headers:
+      Accept: application/json
+      X-Plex-Token: !secret plex_token
+```
+
+#### Writing from the Plezy QR code with an iPhone
+1. Import [TagTunerScanVideoTag.yaml](blueprints/TagTunerScanVideoTag.yaml) as an automation blueprint, create an automation from it and pick the write script. Keep the webhook ID or change it.
+2. Open [TagTuner Plezy tag.shortcut](blueprints/TagTuner%20Plezy%20tag.shortcut) on the iPhone. When asked, enter your Home Assistant address on the home network followed by `/api/webhook/<webhook ID>`, for example `http://homeassistant.local:8123/api/webhook/tagtuner_write_video`.
+3. On the Apple TV, open **Show watch link** for a title. Run the shortcut, scan the QR code, choose Next episode or Shuffle, and place a tag on the reader within 30 seconds.
+
+The webhook only answers on the home network, so the phone has to be on Wi-Fi at home.
+
+#### Playing
+When a video tag is scanned, the Apple TV is woken if needed (HDMI-CEC turns the TV on) and the link is opened. A scan replaces whatever is playing. If nothing is playing after 45 seconds you get a Home Assistant notification. Plezy shows its own message on the TV for a title it can't find, and ignores links it can't parse.
 
 While a video tag is the last tag scanned:
 - click: play/pause
@@ -195,7 +220,9 @@ While a video tag is the last tag scanned:
 - hold and turn: Apple TV volume (the volume limiter doesn't apply)
 - lift the tag: keeps playing
 - put the same tag back: resumes if paused
-- scan a music tag: pauses Infuse and plays the music
+- scan a music tag: pauses the video and plays the music
+
+Tags written earlier for Infuse (`infuse://movie/<tmdb>`, `infuse://series/<tmdb>`, `infuse://series/<tmdb>-<season>-<episode>`) still play in Infuse, see [ADR 2](docs/adr/0002-infuse-deep-links-for-video-tags.md).
 
 ## How to get tags for TagTuner
 ### Upcycle tags you already have
