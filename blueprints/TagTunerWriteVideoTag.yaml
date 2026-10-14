@@ -60,6 +60,8 @@ variables:
     {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_name_or_album_title') | first }}
   button_write_tag: >-
     {{ device_entities(tuner_device_id) | select('match', '^button\..*_write_tag') | first }}
+  sensor_writing: >-
+    {{ device_entities(tuner_device_id) | select('match', '^binary_sensor\..*_writing') | first }}
   notification_id: tagtuner_write_{{ device_attr(tuner_device_id, "name") }}
   given_link: "{{ (link | default('') | trim) | regex_replace('%2[Ff]', '/') }}"
   given_title: "{{ title | default('') | trim }}"
@@ -188,4 +190,19 @@ sequence:
         - {{ m.title }}{{ ' (' ~ m.year ~ ')' if m.year and m.year|string not in m.title }}
         {%endfor%}
         {%endif%}
+  - alias: >-
+      clear the current tag once writing ends, or the first scan of the new tag
+      looks like a rescan of the tag that is playing
+    sequence:
+      - wait_template: "{{ is_state(sensor_writing, 'on') }}"
+        timeout:
+          seconds: 10
+      - wait_template: "{{ is_state(sensor_writing, 'off') }}"
+        timeout:
+          seconds: 40
+      - action: text.set_value
+        data:
+          value: ""
+        target:
+          entity_id: "{{ text_playlist_uri }}"
 mode: single
