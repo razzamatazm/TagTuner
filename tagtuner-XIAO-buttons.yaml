@@ -243,17 +243,8 @@ script:
 sensor:
   - platform: rotary_encoder
     id: rotary
-    # internal pull-ups, in case the encoder board's + (3V3) wire isn't connected
-    pin_a:
-      number: 19 #D8
-      mode:
-        input: true
-        pullup: true
-    pin_b:
-      number: 20 #D9
-      mode:
-        input: true
-        pullup: true
+    pin_a: 19 #D8
+    pin_b: 20 #D9
     resolution: 2
     restore_mode: ALWAYS_ZERO
     on_clockwise:
