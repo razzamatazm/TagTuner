@@ -58,12 +58,6 @@ i2c:
   frequency: 100kHz
   timeout: 13ms #to prevent pn532 timeout
 
-esp32_ble_tracker:
-  scan_parameters:
-    active: false
-bluetooth_proxy:
-  active: false
-
 globals:
   # set when the knob turns while the button is held, so the release
   # doesn't also fire a click
@@ -244,8 +238,16 @@ script:
 sensor:
   - platform: rotary_encoder
     id: rotary
-    pin_a: 19 #D8
-    pin_b: 20 #D9
+    pin_a:
+      number: 19 #D8
+      mode:
+        input: true
+        pullup: true
+    pin_b:
+      number: 20 #D9
+      mode:
+        input: true
+        pullup: true
     resolution: 2
     restore_mode: ALWAYS_ZERO
     on_clockwise:
