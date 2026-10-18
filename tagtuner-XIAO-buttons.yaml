@@ -111,7 +111,7 @@ binary_sensor:
         input: true
         pullup: true
     filters:
-      - delayed_on: 20ms
+      - delayed_off: 20ms
     on_press:
       - script.execute:
           id: skip_event
@@ -125,7 +125,7 @@ binary_sensor:
         input: true
         pullup: true
     filters:
-      - delayed_on: 20ms
+      - delayed_off: 20ms
     on_press:
       - script.execute:
           id: skip_event
