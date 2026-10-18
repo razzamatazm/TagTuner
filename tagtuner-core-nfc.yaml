@@ -172,12 +172,18 @@ button:
       - lambda: |-
           auto message = new nfc::NdefMessage();
           message->add_text_record("TagTuner");
+          // trim stray spaces from the fields before they're written
+          auto trim = [](const std::string &s) {
+            size_t b = s.find_first_not_of(" \t\r\n");
+            if (b == std::string::npos) return std::string();
+            return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);
+          };
           std::string uri = "";
           std::string artist = "artist/";
           std::string playlist = "playlist/";
-          uri += id(playlist_uri).state;
-          artist += id(playlist_artist).state;
-          playlist += id(playlist_info).state;
+          uri += trim(id(playlist_uri).state);
+          artist += trim(id(playlist_artist).state);
+          playlist += trim(id(playlist_info).state);
           if ( artist != "" ) {
             message->add_text_record(artist);
           }
@@ -246,16 +252,22 @@ pn532_i2c:
         id(playlist)="";
         id(artist)="";
         id(uri)="";
+        // tags written by other apps can carry stray spaces around a record
+        auto trim = [](const std::string &s) {
+          size_t b = s.find_first_not_of(" \t\r\n");
+          if (b == std::string::npos) return std::string();
+          return s.substr(b, s.find_last_not_of(" \t\r\n") - b + 1);
+        };
         if (tag.has_ndef_message()) {
           for (auto &record : tag.get_ndef_message()->get_records() ) {
-            std::string payload = record->get_payload();
+            std::string payload = trim(record->get_payload());
             std::string type = record->get_type();
 
             if ( payload.substr(0, 7) == "artist/" ) {
-              id(artist)=payload.substr(7);
+              id(artist)=trim(payload.substr(7));
             }
             else if ( payload.substr(0, 9) == "playlist/" ) {
-              id(playlist)=payload.substr(9);
+              id(playlist)=trim(payload.substr(9));
             }
             else if (type == "U"
             && payload.substr(0, 20) != "https://mb.senic.com"
