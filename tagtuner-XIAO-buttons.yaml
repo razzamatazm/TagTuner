@@ -61,6 +61,7 @@ i2c:
 binary_sensor:
   - platform: gpio
     id: toggle
+    use_interrupt: false
     pin:
       number: 18 #D10
       inverted: true
@@ -104,6 +105,7 @@ binary_sensor:
   # tactile skip buttons, wired between the pin and GND
   - platform: gpio
     id: button_next
+    use_interrupt: false
     pin:
       number: 21 #D3
       inverted: true
@@ -118,6 +120,7 @@ binary_sensor:
           forward: true
   - platform: gpio
     id: button_previous
+    use_interrupt: false
     pin:
       number: 2 #D2
       inverted: true
