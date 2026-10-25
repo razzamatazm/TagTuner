@@ -154,6 +154,15 @@ light:
             - state: false
               duration: 50ms
 
+globals:
+  # detents and clicks sent in the current knob spin
+  - id: knob_detents
+    type: int
+    initial_value: '0'
+  - id: knob_clicks
+    type: int
+    initial_value: '0'
+
 script:
   - id: click_event
     parameters:
@@ -185,8 +194,41 @@ script:
         uri: ""
         artist: ""
         playlist: ""
-  # the knob only sets volume, skips are on the buttons
+  # the knob only sets volume, skips are on the buttons.
+  # A spin sends one click right away and a second if it carries on past
+  # a few detents, so a kid spinning hard can't flood HA with volume steps.
   - id: knob_event
+    parameters:
+      clockwise: bool
+    then:
+    - lambda: |-
+        int dir = clockwise ? 1 : -1;
+        // turning back the other way starts a new spin
+        if (id(knob_detents) * dir < 0) {
+          id(knob_detents) = 0;
+          id(knob_clicks) = 0;
+        }
+        id(knob_detents) += dir;
+    - script.execute: knob_spin_end
+    - if:
+        condition:
+          lambda: |-
+            return id(knob_clicks) == 0
+              || (id(knob_clicks) == 1 && abs(id(knob_detents)) >= 4);
+        then:
+          - lambda: 'id(knob_clicks) += 1;'
+          - script.execute:
+              id: knob_click
+              clockwise: !lambda return clockwise;
+  # the spin ends once the knob has been still for a moment
+  - id: knob_spin_end
+    mode: restart
+    then:
+    - delay: 400ms
+    - lambda: |-
+        id(knob_detents) = 0;
+        id(knob_clicks) = 0;
+  - id: knob_click
     parameters:
       clockwise: bool
     then:
