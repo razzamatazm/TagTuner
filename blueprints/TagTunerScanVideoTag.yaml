@@ -38,4 +38,4 @@ actions:
       mode: "{{ trigger.json.mode | default('next') }}"
       title: "{{ trigger.json.title | default('') }}"
 
-mode: single
+mode: restart

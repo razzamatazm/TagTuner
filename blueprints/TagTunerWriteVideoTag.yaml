@@ -6,7 +6,8 @@ blueprint:
     with the TagTuner iPhone shortcut, see README), or type a title and the
     script finds it in your Plex library. Take any tag off the reader, run the
     script, then place the tag within 30 seconds. A tag left on the reader is
-    skipped.
+    skipped. Tap the tag again afterwards and the script checks what got
+    written.
   domain: script
   input:
     tuner_id:
@@ -62,7 +63,6 @@ variables:
     {{ device_entities(tuner_device_id) | select('match', '^button\..*_write_tag') | first }}
   sensor_writing: >-
     {{ device_entities(tuner_device_id) | select('match', '^binary_sensor\..*_writing') | first }}
-  notification_id: tagtuner_write_{{ device_attr(tuner_device_id, "name") }}
   given_link: "{{ (link | default('') | trim) | regex_replace('%2[Ff]', '/') }}"
   given_title: "{{ title | default('') | trim }}"
   shuffle: "{{ (mode | default('next') | lower) == 'shuffle' }}"
@@ -90,11 +90,11 @@ sequence:
       - condition: template
         value_template: "{{ problem | trim != '' }}"
     then:
-      - action: persistent_notification.create
+      - action: logbook.log
         data:
-          notification_id: "{{ notification_id }}"
-          title: TagTuner video tag
-          message: "{{ problem | trim }} Nothing was written."
+          name: TagTuner
+          entity_id: "{{ button_write_tag }}"
+          message: "didn't write a video tag. {{ problem | trim }}"
       - stop: bad input
   - alias: look the title up in Plex, by GUID for a link, by search for a title
     if:
@@ -140,13 +140,13 @@ sequence:
       - condition: template
         value_template: "{{ not chosen }}"
     then:
-      - action: persistent_notification.create
+      - action: logbook.log
         data:
-          notification_id: "{{ notification_id }}"
-          title: TagTuner video tag
+          name: TagTuner
+          entity_id: "{{ button_write_tag }}"
           message: >-
-            No show or movie matching "{{ given_title }}" with a Plex GUID. Use the
-            watch link from Plezy instead. Nothing was written.
+            didn't write a video tag. No show or movie matching "{{ given_title }}"
+            has a Plex GUID, use the watch link from Plezy instead.
       - stop: nothing to write
   - variables:
       tag_request: >-
@@ -176,33 +176,91 @@ sequence:
   - action: button.press
     target:
       entity_id: "{{ button_write_tag }}"
-  - action: persistent_notification.create
+  - action: logbook.log
     data:
-      notification_id: "{{ notification_id }}"
-      title: TagTuner video tag
+      name: TagTuner
+      entity_id: "{{ button_write_tag }}"
       message: >-
-        Writing {{ chosen.title or 'the link' }}{{ ' (' ~ chosen.year ~ ')' if chosen.year and chosen.year|string not in chosen.title }}
+        is ready to write {{ chosen.title or 'the link' }}{{ ' (' ~ chosen.year ~ ')' if chosen.year and chosen.year|string not in chosen.title }}
         as {{ tag_request }}. Place the tag on the reader within 30 seconds.
         {%if given_link == '' and matches | length > 1 %}
-
         Other matches, run again with their Plezy watch link if this is the wrong one:
-        {%for m in matches[1:] %}
-        - {{ m.title }}{{ ' (' ~ m.year ~ ')' if m.year and m.year|string not in m.title }}
-        {%endfor%}
+        {%for m in matches[1:] %}{{ m.title }}{{ ' (' ~ m.year ~ ')' if m.year and m.year|string not in m.title }}{{ ', ' if not loop.last }}{%endfor%}.
         {%endif%}
+  - wait_template: "{{ is_state(sensor_writing, 'on') }}"
+    timeout:
+      seconds: 10
+  - wait_template: "{{ is_state(sensor_writing, 'off') }}"
+    timeout:
+      seconds: 40
   - alias: >-
-      clear the current tag once writing ends, or the first scan of the new tag
-      looks like a rescan of the tag that is playing
-    sequence:
-      - wait_template: "{{ is_state(sensor_writing, 'on') }}"
-        timeout:
-          seconds: 10
-      - wait_template: "{{ is_state(sensor_writing, 'off') }}"
-        timeout:
-          seconds: 40
-      - action: text.set_value
-        data:
-          value: ""
-        target:
-          entity_id: "{{ text_playlist_uri }}"
-mode: single
+      clear the current tag, or the first scan of the new tag looks like a
+      rescan of the tag that is playing
+    action: text.set_value
+    data:
+      value: ""
+    target:
+      entity_id: "{{ text_playlist_uri }}"
+  - action: logbook.log
+    data:
+      name: TagTuner
+      entity_id: "{{ button_write_tag }}"
+      message: >-
+        finished writing. Lift the tag and tap it again within a minute to
+        check that {{ chosen.title or 'the link' }} is on it.
+  - alias: >-
+      the reader says it finished writing even when the write failed, so read
+      the tag back. Skip its tag removed events.
+    variables:
+      check_until: "{{ now().timestamp() + 60 }}"
+  - repeat:
+      sequence:
+        - wait_for_trigger:
+            - trigger: event
+              event_type: esphome.tagtuner
+              event_data:
+                device_id: "{{ tuner_device_id }}"
+            - trigger: event
+              event_type: tag_scanned
+              event_data:
+                device_id: "{{ tuner_device_id }}"
+          timeout:
+            seconds: "{{ [check_until - now().timestamp(), 0] | max }}"
+      until:
+        - condition: template
+          value_template: >-
+            {{ wait.trigger is none or wait.trigger.event.event_type == 'tag_scanned'
+               or wait.trigger.event.data.action in ('tagScanned', 'tag_scanned') }}
+  - variables:
+      read_back: >-
+        {%if wait.trigger is none %}
+          {{ {} }}
+        {%elif wait.trigger.event.event_type == 'tag_scanned' %}
+          {{ {'uid': wait.trigger.event.data.tag_id, 'uri': ''} }}
+        {%else%}
+          {{ {'uid': wait.trigger.event.data.uid, 'uri': wait.trigger.event.data.uri | trim} }}
+        {%endif%}
+  - action: logbook.log
+    data:
+      name: TagTuner
+      entity_id: "{{ button_write_tag }}"
+      message: >-
+        {%if not read_back %}
+          didn't check {{ chosen.title or 'the link' }}, the tag wasn't tapped
+          again. Tap it now: if the reader's status says "Plain UID tag", the
+          write didn't take.
+        {%elif read_back.uri == tag_request %}
+          checked tag {{ read_back.uid }}: it has {{ chosen.title or tag_request }}.
+        {%else%}
+          checked tag {{ read_back.uid }}: it doesn't have {{ chosen.title or 'the new link' }}.
+          {%if read_back.uri == '' %}
+          It read as a blank tag. The reader misreads sometimes, so tap it once
+          more: if the status says "Plain UID tag" again, the write didn't take.
+          {%else%}
+          It has {{ read_back.uri }}.
+          {%endif%}
+          If that's the tag you just wrote, run the write again. If not, you
+          tapped a different tag. Any artist or album the reader fields show
+          now is what was last playing, not what's on the tag.
+        {%endif%}
+mode: restart
