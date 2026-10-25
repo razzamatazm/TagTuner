@@ -259,6 +259,14 @@ conditions:
   - condition: template
     value_template: "{{ trigger.event.data.device_id == tuner_device_id }}"
 actions:
+  - alias: skip knob turns that waited behind a slow speaker, so a spin can't hold up the next tag
+    if:
+      - condition: template
+        value_template: >-
+          {{ trigger.platform == 'event' and action in ("volumeUp", "volumeDown")
+          and (now() - trigger.event.time_fired).total_seconds() > 2 }}
+    then:
+      - stop: stale knob turn
   - choose:
       - conditions:
           - condition: template
@@ -829,6 +837,7 @@ actions:
             You can disable this notification in {{this.attributes.friendly_name}} automation Additional settings.'
     alias: version mismatch notify 2
 mode: queued
-max: 10
+# room for a burst of knob turns, which drop out fast, without losing a tag scan
+max: 30
 trace:
   stored_traces: 30
