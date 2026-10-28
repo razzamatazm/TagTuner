@@ -791,22 +791,23 @@ actions:
           value: "{{ uri|truncate(255, true, '') }}"
         target:
           entity_id: "{{ text_playlist_uri }}"
-      - action: text.set_value
+      - alias: >-
+          clear the labels. Copying the player's track here showed whatever
+          played last, since nothing new has started yet
+        action: text.set_value
         data:
-          value: >-
-            {{ [state_attr(massplayer, 'media_artist'), state_attr(httpplayer, 'media_artist') ]|select|first|truncate(50, true, '…') }}
+          value: ""
         target:
           entity_id: "{{ text_playlist_artist }}"
       - action: text.set_value
         data:
-          value: >-
-            {{ [state_attr(massplayer, 'media_album_name'), state_attr(httpplayer, 'media_album_name') ]|select|first|truncate(100, true, '…') }}
+          value: ""
         target:
           entity_id: "{{ text_playlist_name }}"
-    alias: update helpers with first song for read-only tags
+    alias: update helpers for read-only tags
   - if:
       - condition: template
-        value_template: "{{ notify_version == true and trigger.event.data.magic|int(2024) < 260100 }}"
+        value_template: "{{ notify_version == true and 'magic' in trigger.event.data and trigger.event.data.magic|int(2024) < 260100 }}"
     then:
       - action: persistent_notification.create
         data:
@@ -824,7 +825,7 @@ actions:
     alias: version mismatch notify 1
   - if:
       - condition: template
-        value_template: "{{ notify_version == true and trigger.event.data.magic|int(2024) >   blprnt_version|int }}"
+        value_template: "{{ notify_version == true and 'magic' in trigger.event.data and trigger.event.data.magic|int(2024) >   blprnt_version|int }}"
     then:
       - action: persistent_notification.create
         data:
