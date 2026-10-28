@@ -9,12 +9,17 @@ namespace esphome::pn532 {
 
 static const char *const TAG = "pn532.mifare_ultralight";
 
+// a card on the edge of the field can drop a single exchange; try each page this many times
+static constexpr uint8_t PAGE_ATTEMPTS = 3;
+
+// Returns nullptr when the card couldn't be read, so the caller can try again
+// instead of reporting a tag that has data as one without.
 std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(nfc::NfcTagUid &uid) {
   UltralightReadBuffer data;
   // pages 3 to 6 contain various info we are interested in -- do one read to grab it all
   if (!this->read_mifare_ultralight_bytes_(3, nfc::MIFARE_ULTRALIGHT_PAGE_SIZE * nfc::MIFARE_ULTRALIGHT_READ_SIZE,
                                            data)) {
-    return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+    return nullptr;
   }
 
   if (!this->is_mifare_ultralight_formatted_(data)) {
@@ -38,7 +43,7 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(nfc::NfcTagUid &
   if (read_length) {
     if (!read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + 3, read_length, data)) {
       ESP_LOGE(TAG, "Error reading tag data");
-      return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+      return nullptr;
     }
   }
   // skip page 3 as well as any bytes ahead of message_start_index
@@ -56,7 +61,13 @@ bool PN532::read_mifare_ultralight_bytes_(uint8_t start_page, uint16_t num_bytes
 
   for (uint8_t i = 0; i * MIFARE_READ_SIZE < num_bytes; i++) {
     // a READ returns 4 pages (16 bytes)
-    if (!this->mifare_read_(uint8_t(i * nfc::MIFARE_ULTRALIGHT_READ_SIZE + start_page), chunk)) {
+    const uint8_t page = i * nfc::MIFARE_ULTRALIGHT_READ_SIZE + start_page;
+    bool read_ok = false;
+    for (uint8_t attempt = 0; attempt < PAGE_ATTEMPTS && !read_ok; attempt++) {
+      read_ok = this->mifare_read_(page, chunk);
+    }
+    if (!read_ok) {
+      ESP_LOGW(TAG, "Error reading page %u", page);
       return false;
     }
     // keep only the bytes still wanted from this read
@@ -164,12 +175,13 @@ bool PN532::write_mifare_ultralight_page_(uint8_t page_num, const std::span<cons
   }
 
   PN532Frame response;
-  if (!this->in_data_exchange_(cmd, response)) {
-    ESP_LOGE(TAG, "Error writing page %u", page_num);
-    return false;
+  for (uint8_t attempt = 0; attempt < PAGE_ATTEMPTS; attempt++) {
+    if (this->in_data_exchange_(cmd, response)) {
+      return true;
+    }
   }
-
-  return true;
+  ESP_LOGE(TAG, "Error writing page %u", page_num);
+  return false;
 }
 
 }  // namespace esphome::pn532

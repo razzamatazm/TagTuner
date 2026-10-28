@@ -113,6 +113,16 @@ class PN532 : public PollingComponent {
 
   std::unique_ptr<nfc::NfcTag> read_tag_(nfc::NfcTagUid &uid, uint8_t tag_type);
 
+  // TagTuner: a card has to miss this many polls in a row before it counts
+  // as removed, so a card on the edge of the field doesn't flicker
+  static constexpr uint8_t REMOVAL_MISSED_POLLS = 3;
+  // TagTuner: a tag whose data couldn't be read is retried on the next polls
+  // this many times before it's reported without data
+  static constexpr uint8_t READ_ATTEMPTS = 3;
+  void report_removed_();
+  /// Runs a clean, format or write task; false if the card dropped out partway
+  bool run_task_(nfc::NfcTagUid &uid, uint8_t tag_type);
+
   bool format_tag_(nfc::NfcTagUid &uid, uint8_t tag_type);
   bool clean_tag_(nfc::NfcTagUid &uid, uint8_t tag_type);
   bool write_tag_(nfc::NfcTagUid &uid, uint8_t tag_type, nfc::NdefMessage *message);
@@ -172,6 +182,8 @@ class PN532 : public PollingComponent {
   PN532ReadReady rd_ready_{WOULDBLOCK};
   NfcTask next_task_{READ};
   PN532Error error_code_{NONE};
+  uint8_t missed_polls_{0};
+  uint8_t read_failures_{0};
   bool rd_started_{false};
   bool updates_enabled_{true};
   bool requested_read_{false};

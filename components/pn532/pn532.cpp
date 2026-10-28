@@ -144,31 +144,15 @@ void PN532::loop() {
 
   this->requested_read_ = false;
 
-  if (!success) {
-    // Something failed
-#ifdef PN532_ON_TAG_REMOVED_TRIGGER_COUNT
-    if (!this->current_uid_.empty()) {
-      auto tag = make_unique<nfc::NfcTag>(this->current_uid_);
-      for (auto *trigger : this->triggers_ontagremoved_)
-        trigger->process(tag);
-    }
-#endif
-    this->current_uid_ = {};
-    this->turn_off_rf_();
-    return;
-  }
-
-  uint8_t num_targets = read.empty() ? 0 : read[0];
+  uint8_t num_targets = (success && !read.empty()) ? read[0] : 0;
   if (num_targets != 1) {
-    // no tags found or too many
-#ifdef PN532_ON_TAG_REMOVED_TRIGGER_COUNT
-    if (!this->current_uid_.empty()) {
-      auto tag = make_unique<nfc::NfcTag>(this->current_uid_);
-      for (auto *trigger : this->triggers_ontagremoved_)
-        trigger->process(tag);
+    // no tags found, too many, or the poll failed
+    if (!this->current_uid_.empty() && ++this->missed_polls_ >= REMOVAL_MISSED_POLLS) {
+      this->report_removed_();
     }
-#endif
-    this->current_uid_ = {};
+    if (this->current_uid_.empty()) {
+      this->read_failures_ = 0;
+    }
     this->turn_off_rf_();
     return;
   }
@@ -197,6 +181,7 @@ void PN532::loop() {
   }
 #endif
 
+  this->missed_polls_ = 0;
   if (nfcid.size() == this->current_uid_.size()) {
     bool same_uid = true;
     for (size_t i = 0; i < nfcid.size(); i++)
@@ -204,11 +189,24 @@ void PN532::loop() {
     if (same_uid)
       return;
   }
-
-  this->current_uid_ = nfcid;
+  if (!this->current_uid_.empty()) {
+    // a different card arrived before the last one counted as removed
+    this->report_removed_();
+  }
 
   if (next_task_ == READ) {
     auto tag = this->read_tag_(nfcid, tag_type);
+    if (tag == nullptr) {
+      if (++this->read_failures_ < READ_ATTEMPTS) {
+        ESP_LOGW(TAG, "Couldn't read the tag's data, trying again");
+        this->turn_off_rf_();
+        return;
+      }
+      ESP_LOGW(TAG, "Couldn't read the tag's data, reporting it without data");
+      tag = make_unique<nfc::NfcTag>(nfcid, nfc::NFC_FORUM_TYPE_2);
+    }
+    this->read_failures_ = 0;
+    this->current_uid_ = nfcid;
 #ifdef PN532_ON_TAG_TRIGGER_COUNT
     for (auto *trigger : this->triggers_ontag_)
       trigger->process(tag);
@@ -226,33 +224,15 @@ void PN532::loop() {
         }
       }
     }
-  } else if (next_task_ == CLEAN) {
-    ESP_LOGD(TAG, "  Tag cleaning");
-    if (!this->clean_tag_(nfcid, tag_type)) {
-      ESP_LOGE(TAG, "  Tag was not fully cleaned successfully");
-    }
-    ESP_LOGD(TAG, "  Tag cleaned!");
-  } else if (next_task_ == FORMAT) {
-    ESP_LOGD(TAG, "  Tag formatting");
-    if (!this->format_tag_(nfcid, tag_type)) {
-      ESP_LOGE(TAG, "Error formatting tag as NDEF");
-    }
-    ESP_LOGD(TAG, "  Tag formatted!");
-  } else if (next_task_ == WRITE) {
-    if (this->next_task_message_to_write_ != nullptr) {
-      ESP_LOGD(TAG, "  Tag writing");
-      ESP_LOGD(TAG, "  Tag formatting");
-      if (!this->format_tag_(nfcid, tag_type)) {
-        ESP_LOGE(TAG, "  Tag could not be formatted for writing");
-      } else {
-        ESP_LOGD(TAG, "  Writing NDEF data");
-        if (!this->write_tag_(nfcid, tag_type, this->next_task_message_to_write_.get())) {
-          ESP_LOGE(TAG, "  Failed to write message to tag");
-        }
-        ESP_LOGD(TAG, "  Finished writing NDEF data");
-        this->next_task_message_to_write_.reset();
-        this->on_finished_write_callback_.call();
-      }
+  } else {
+    this->current_uid_ = nfcid;
+    if (!this->run_task_(nfcid, tag_type)) {
+      // the card most likely dropped out partway. Forget it so the next poll
+      // selects it again and retries, until the caller gives up with read_mode()
+      ESP_LOGW(TAG, "  Trying again on the next poll");
+      this->current_uid_ = {};
+      this->turn_off_rf_();
+      return;
     }
   }
 
@@ -261,6 +241,56 @@ void PN532::loop() {
   this->turn_off_rf_();
 }
 
+void PN532::report_removed_() {
+#ifdef PN532_ON_TAG_REMOVED_TRIGGER_COUNT
+  auto tag = make_unique<nfc::NfcTag>(this->current_uid_);
+  for (auto *trigger : this->triggers_ontagremoved_)
+    trigger->process(tag);
+#endif
+  this->current_uid_ = {};
+  this->missed_polls_ = 0;
+}
+
+bool PN532::run_task_(nfc::NfcTagUid &nfcid, const uint8_t tag_type) {
+  if (next_task_ == CLEAN) {
+    ESP_LOGD(TAG, "  Tag cleaning");
+    if (!this->clean_tag_(nfcid, tag_type)) {
+      ESP_LOGE(TAG, "  Tag was not fully cleaned successfully");
+      return false;
+    }
+    ESP_LOGD(TAG, "  Tag cleaned!");
+  } else if (next_task_ == FORMAT) {
+    ESP_LOGD(TAG, "  Tag formatting");
+    if (!this->format_tag_(nfcid, tag_type)) {
+      ESP_LOGE(TAG, "Error formatting tag as NDEF");
+      return false;
+    }
+    ESP_LOGD(TAG, "  Tag formatted!");
+  } else if (next_task_ == WRITE) {
+    if (this->next_task_message_to_write_ != nullptr) {
+      ESP_LOGD(TAG, "  Tag writing");
+      // A Type 2 tag isn't blanked first: the message ends in a terminator, so
+      // old bytes after it are ignored, and skipping ~124 blanking writes gives
+      // a card on the edge of the field far fewer chances to drop out.
+      if (tag_type != nfc::TAG_TYPE_2) {
+        ESP_LOGD(TAG, "  Tag formatting");
+        if (!this->format_tag_(nfcid, tag_type)) {
+          ESP_LOGE(TAG, "  Tag could not be formatted for writing");
+          return false;
+        }
+      }
+      ESP_LOGD(TAG, "  Writing NDEF data");
+      if (!this->write_tag_(nfcid, tag_type, this->next_task_message_to_write_.get())) {
+        ESP_LOGE(TAG, "  Failed to write message to tag");
+        return false;
+      }
+      ESP_LOGD(TAG, "  Finished writing NDEF data");
+      this->next_task_message_to_write_.reset();
+      this->on_finished_write_callback_.call();
+    }
+  }
+  return true;
+}
 bool PN532::write_command_(const std::span<const uint8_t> data) {
   if (data.size() > PN532_FRAME_MAX_DATA_SIZE) {
     return false;
@@ -397,6 +427,8 @@ std::unique_ptr<nfc::NfcTag> PN532::read_tag_(nfc::NfcTagUid &uid, const uint8_t
 }
 
 void PN532::read_mode() {
+  // a write that never finished leaves its message behind
+  this->next_task_message_to_write_.reset();
   this->next_task_ = READ;
   ESP_LOGD(TAG, "Waiting to read next tag");
 }
