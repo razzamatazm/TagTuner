@@ -6,6 +6,13 @@ packages:
   core-nfc: !include tagtuner-core-nfc.yaml
   core-comms: !include tagtuner-core-comms.yaml
 
+# ESPHome's pn532 with page retries, write retries and debounced tag removal,
+# see components/pn532
+external_components:
+  - source: github://razzamatazm/TagTuner@xiao-buttons
+    components: [pn532]
+    refresh: 0d
+
 esphome:
   name: "${name}"
   friendly_name: ${friendly_name}

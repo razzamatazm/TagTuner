@@ -155,11 +155,17 @@ button:
           condition:
             pn532.is_writing:
           then:
+          # no tag, or it kept dropping out for 30s
           - lambda: 'id(pn532_board).read_mode();'
-      - text_sensor.template.publish:
-          id: status
-          state: "Finished erasing tag"
-      - script.execute: led_success
+          - text_sensor.template.publish:
+              id: status
+              state: "Tag not erased"
+          - script.execute: led_blink
+          else:
+          - text_sensor.template.publish:
+              id: status
+              state: "Finished erasing tag"
+          - script.execute: led_success
 
   - platform: template
     name: Write Tag
@@ -207,11 +213,17 @@ button:
           condition:
             pn532.is_writing:
           then:
+          # no tag, or it kept dropping out for 30s
           - lambda: 'id(pn532_board).read_mode();'
-      - text_sensor.template.publish:
-          id: status
-          state: "Finished writing tag"
-      - script.execute: led_success
+          - text_sensor.template.publish:
+              id: status
+              state: "Tag not written"
+          - script.execute: led_blink
+          else:
+          - text_sensor.template.publish:
+              id: status
+              state: "Finished writing tag"
+          - script.execute: led_success
 
 globals:
   - id: artist

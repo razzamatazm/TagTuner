@@ -91,13 +91,25 @@ class PN532 : public PollingComponent {
   bool write_mifare_ultralight_tag_(nfc::NfcTagUid &uid, nfc::NdefMessage *message);
   bool clean_mifare_ultralight_();
 
+  // TagTuner: a card has to miss this many polls in a row before it counts
+  // as removed, so a card on the edge of the field doesn't flicker
+  static const uint8_t REMOVAL_MISSED_POLLS = 3;
+  // TagTuner: a tag whose data couldn't be read is retried on the next polls
+  // this many times before it's reported without data
+  static const uint8_t READ_ATTEMPTS = 3;
+  void forget_tag_() { this->current_uid_ = {}; }
+  void report_removed_();
+  bool run_task_(nfc::NfcTagUid &nfcid);
+
   bool updates_enabled_{true};
   bool requested_read_{false};
+  uint8_t missed_polls_{0};
+  uint8_t read_failures_{0};
   std::vector<PN532BinarySensor *> binary_sensors_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontag_;
   std::vector<nfc::NfcOnTagTrigger *> triggers_ontagremoved_;
   nfc::NfcTagUid current_uid_;
-  nfc::NdefMessage *next_task_message_to_write_;
+  nfc::NdefMessage *next_task_message_to_write_{nullptr};
   optional<uint32_t> rd_start_time_{};
   enum PN532ReadReady rd_ready_ { WOULDBLOCK };
   enum NfcTask {

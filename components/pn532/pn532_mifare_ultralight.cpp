@@ -8,12 +8,17 @@ namespace esphome::pn532 {
 
 static const char *const TAG = "pn532.mifare_ultralight";
 
+// a card on the edge of the field can drop a single exchange; try each page this many times
+static const uint8_t PAGE_ATTEMPTS = 3;
+
+// Returns nullptr when the card couldn't be read, so the caller can try again
+// instead of reporting a tag that has data as one without.
 std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(nfc::NfcTagUid &uid) {
   std::vector<uint8_t> data;
   // pages 3 to 6 contain various info we are interested in -- do one read to grab it all
   if (!this->read_mifare_ultralight_bytes_(3, nfc::MIFARE_ULTRALIGHT_PAGE_SIZE * nfc::MIFARE_ULTRALIGHT_READ_SIZE,
                                            data)) {
-    return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+    return nullptr;
   }
 
   if (!this->is_mifare_ultralight_formatted_(data)) {
@@ -37,7 +42,7 @@ std::unique_ptr<nfc::NfcTag> PN532::read_mifare_ultralight_tag_(nfc::NfcTagUid &
   if (read_length) {
     if (!read_mifare_ultralight_bytes_(nfc::MIFARE_ULTRALIGHT_DATA_START_PAGE + 3, read_length, data)) {
       ESP_LOGE(TAG, "Error reading tag data");
-      return make_unique<nfc::NfcTag>(uid, nfc::NFC_FORUM_TYPE_2);
+      return nullptr;
     }
   }
   // we need to trim off page 3 as well as any bytes ahead of message_start_index
@@ -51,16 +56,19 @@ bool PN532::read_mifare_ultralight_bytes_(uint8_t start_page, uint16_t num_bytes
   std::vector<uint8_t> response;
 
   for (uint8_t i = 0; i * read_increment < num_bytes; i++) {
-    if (!this->write_command_({
-            PN532_COMMAND_INDATAEXCHANGE,
-            0x01,  // One card
-            nfc::MIFARE_CMD_READ,
-            uint8_t(i * nfc::MIFARE_ULTRALIGHT_READ_SIZE + start_page),
-        })) {
-      return false;
+    bool read_ok = false;
+    for (uint8_t attempt = 0; attempt < PAGE_ATTEMPTS && !read_ok; attempt++) {
+      read_ok = this->write_command_({
+                    PN532_COMMAND_INDATAEXCHANGE,
+                    0x01,  // One card
+                    nfc::MIFARE_CMD_READ,
+                    uint8_t(i * nfc::MIFARE_ULTRALIGHT_READ_SIZE + start_page),
+                }) &&
+                this->read_response(PN532_COMMAND_INDATAEXCHANGE, response) && !response.empty() &&
+                response[0] == 0x00;
     }
-
-    if (!this->read_response(PN532_COMMAND_INDATAEXCHANGE, response) || response[0] != 0x00) {
+    if (!read_ok) {
+      ESP_LOGW(TAG, "Error reading page %u", uint8_t(i * nfc::MIFARE_ULTRALIGHT_READ_SIZE + start_page));
       return false;
     }
     uint16_t bytes_offset = (i + 1) * read_increment;
@@ -174,18 +182,17 @@ bool PN532::write_mifare_ultralight_page_(uint8_t page_num, const uint8_t *write
       page_num,
   });
   cmd.insert(cmd.end(), write_data, write_data + len);
-  if (!this->write_command_(cmd)) {
-    ESP_LOGE(TAG, "Error writing page %u", page_num);
-    return false;
-  }
 
   std::vector<uint8_t> response;
-  if (!this->read_response(PN532_COMMAND_INDATAEXCHANGE, response)) {
-    ESP_LOGE(TAG, "Error writing page %u", page_num);
-    return false;
+  for (uint8_t attempt = 0; attempt < PAGE_ATTEMPTS; attempt++) {
+    // status 0x00 means the card acknowledged the write
+    if (this->write_command_(cmd) && this->read_response(PN532_COMMAND_INDATAEXCHANGE, response) &&
+        !response.empty() && response[0] == 0x00) {
+      return true;
+    }
   }
-
-  return true;
+  ESP_LOGE(TAG, "Error writing page %u", page_num);
+  return false;
 }
 
 }  // namespace esphome::pn532
