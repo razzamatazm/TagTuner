@@ -256,6 +256,9 @@ Fill in the Playlist URI -> click _Write Tag_ -> LED starts flashing red -> Plac
 Successful writing will be confirmed with green light.\
 Check Diagnostic->Status for any additional information.
 
+#### Searching Music Assistant instead
+Import [TagTunerWriteMusicTag.yaml](blueprints/TagTunerWriteMusicTag.yaml) as a script blueprint and create a script from it, picking your TagTuner, your Music Assistant server and your tag size. Name it "TagTuner write music tag" so its ID is `script.tagtuner_write_music_tag`. Run it with a search (and optionally a type) and it writes the best match: your library comes first, exact name matches go to the top, and the notification lists the other matches with their URIs. You can also run it with a URI you already have. Turn on Shuffle to add `/shuffle` to the URI. Artist and title are shortened to fit the tag; the URI never is.
+
 ### Program tags for Sonos
 If your speaker is Sonos media player, your tags can have a plain HTTP playlist URL.\
 [Here](https://support.apple.com/en-us/118235) you can find instructions on how to get the album or playlist url for Apple Music. Just copy it.\

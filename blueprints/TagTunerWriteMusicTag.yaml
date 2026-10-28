@@ -1,0 +1,270 @@
+blueprint:
+  name: TagTuner write Music Assistant tag
+  description: >-
+    Searches Music Assistant and writes the result to a tag with your
+    TagTuner. Run it with a search and it writes the best match, or with a URI
+    you already have. Take any tag off the reader, run the script, then place
+    the tag within 30 seconds.
+  domain: script
+  source_url: https://github.com/razzamatazm/TagTuner/blob/main/blueprints/TagTunerWriteMusicTag.yaml
+  input:
+    tuner_id:
+      name: TagTuner for ESPHome
+      description: The reader that writes the tags
+      selector:
+        device:
+          filter:
+            - integration: esphome
+    mass_entry:
+      name: Music Assistant
+      description: The Music Assistant server to search
+      selector:
+        config_entry:
+          integration: music_assistant
+    tag_type:
+      name: Tag type
+      description: >-
+        Your tags' size. Artist and title are shortened to fit, the URI never
+        is.
+      default: ntag213
+      selector:
+        select:
+          options:
+            - label: NTAG213 (144 bytes)
+              value: ntag213
+            - label: NTAG215 (504 bytes)
+              value: ntag215
+            - label: NTAG216 (888 bytes)
+              value: ntag216
+
+fields:
+  query:
+    name: Search
+    description: what to search Music Assistant for
+    selector:
+      text:
+  media_type:
+    name: Type
+    description: what kind of item to search for
+    default: any
+    selector:
+      select:
+        options:
+          - any
+          - album
+          - playlist
+          - artist
+          - track
+          - radio
+          - podcast
+          - audiobook
+  uri:
+    name: URI
+    description: write this Music Assistant URI instead of searching
+    selector:
+      text:
+  title:
+    name: Title
+    description: with a URI, the album or playlist name stored on the tag
+    selector:
+      text:
+  artist:
+    name: Artist
+    description: with a URI, the artist stored on the tag
+    selector:
+      text:
+  shuffle:
+    name: Shuffle
+    description: adds /shuffle to the URI so this tag always shuffles
+    default: false
+    selector:
+      boolean:
+  list_only:
+    name: Only list matches
+    description: >-
+      return the matches without writing anything
+    default: false
+    selector:
+      boolean:
+
+variables:
+  tuner_device_id: !input tuner_id
+  mass_entry: !input mass_entry
+  tag_type: !input tag_type
+  text_playlist_uri: >-
+    {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_uri') | first }}
+  text_playlist_artist: >-
+    {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_artist') | first }}
+  text_playlist_name: >-
+    {{ device_entities(tuner_device_id) | select('match', '^text\..*_playlist_name_or_album_title') | first }}
+  button_write_tag: >-
+    {{ device_entities(tuner_device_id) | select('match', '^button\..*_write_tag') | first }}
+  sensor_writing: >-
+    {{ device_entities(tuner_device_id) | select('match', '^binary_sensor\..*_writing') | first }}
+  notification_id: tagtuner_write_{{ device_attr(tuner_device_id, "name") }}
+  given_uri: "{{ uri | default('') | trim }}"
+  given_query: "{{ query | default('') | trim }}"
+  search_type: "{{ media_type | default('any') | lower }}"
+  search_types: >-
+    {{ ['album', 'playlist', 'artist', 'track', 'radio'] if search_type == 'any' else [search_type] }}
+  wants_shuffle: "{{ shuffle | default(false) | string | lower in ['true', 'on', 'yes', '1', 'shuffle'] }}"
+  only_list: "{{ list_only | default(false) | string | lower in ['true', 'on', 'yes', '1'] }}"
+
+sequence:
+  - if:
+      - condition: template
+        value_template: "{{ given_uri == '' and given_query == '' }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: "{{ notification_id }}"
+          title: TagTuner music tag
+          message: Give a search or a URI. Nothing was written.
+      - stop: nothing to search for
+  - alias: search Music Assistant when there's no URI
+    if:
+      - condition: template
+        value_template: "{{ given_uri == '' }}"
+    then:
+      - action: music_assistant.search
+        data:
+          config_entry_id: "{{ mass_entry }}"
+          name: "{{ given_query }}"
+          media_type: "{{ search_types }}"
+        response_variable: found
+  - variables:
+      matches: >-
+        {%set ns = namespace(exact=[], rest=[]) %}
+        {%if found is defined %}
+          {%for type in search_types %}
+            {%for m in found[type if type == 'radio' else type ~ 's'] | default([]) %}
+              {%set item = {'uri': m.uri, 'title': m.name, 'type': type,
+                            'artist': (m.artists | default([]) | map(attribute='name') | join(', ')) or m.owner | default('')} %}
+              {%if m.name | lower == given_query | lower %}
+                {%set ns.exact = ns.exact + [item] %}
+              {%else%}
+                {%set ns.rest = ns.rest + [item] %}
+              {%endif%}
+            {%endfor%}
+          {%endfor%}
+        {%endif%}
+        {{ (ns.exact + ns.rest)[:15] }}
+      choices: >-
+        {%set ns = namespace(labels=[], items={}) %}
+        {%for m in matches %}
+          {%set source = m.uri.split('://')[0].split('--')[0] %}
+          {%set notes = ([m.type] if search_type == 'any' else []) + ([source] if source != 'library' else []) %}
+          {%set label = loop.index ~ '. ' ~ m.title ~ (' · ' ~ m.artist if m.artist else '') ~ (' (' ~ notes | join(', ') ~ ')' if notes else '') %}
+          {%set ns.labels = ns.labels + [label] %}
+          {%set ns.items = dict(ns.items, **{label: m}) %}
+        {%endfor%}
+        {{ {'labels': ns.labels, 'items': ns.items} }}
+  - if:
+      - condition: template
+        value_template: "{{ only_list }}"
+    then:
+      - stop: listed matches
+        response_variable: choices
+  - variables:
+      chosen: >-
+        {%if given_uri != '' %}
+          {{ {'uri': given_uri, 'title': title | default('') | trim, 'artist': artist | default('') | trim} }}
+        {%elif matches %}
+          {{ matches[0] }}
+        {%else%}
+          {{ {} }}
+        {%endif%}
+  - if:
+      - condition: template
+        value_template: "{{ not chosen }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: "{{ notification_id }}"
+          title: TagTuner music tag
+          message: Music Assistant found nothing for "{{ given_query }}". Nothing was written.
+      - stop: nothing to write
+  - variables:
+      tag_request: >-
+        {{ chosen.uri ~ ('/shuffle' if wants_shuffle and chosen.uri[-8:] != '/shuffle' else '') }}
+      # NDEF bytes: 3 for the TLV, 7 per text record plus "artist/" and
+      # "playlist/", 5 for the URI record, 4 spare. Labels are cut by UTF-8
+      # bytes, so emoji and accents can't overflow the tag.
+      label_room: >-
+        {{ {'ntag213': 144, 'ntag215': 504, 'ntag216': 888}[tag_type] - 3 - 14 - 16 - 5 - 4 - tag_request | length }}
+      labels: >-
+        {%macro bytes(s) %}{{ s | urlencode | regex_replace('%[0-9A-Fa-f]{2}', 'x') | length }}{%endmacro%}
+        {%macro cut(s, room) %}
+          {%-set ns = namespace(out='', used=0, full=false) %}
+          {%-for ch in s %}
+            {%-set b = bytes(ch) | int %}
+            {%-if not ns.full and ns.used + b <= room %}
+              {%-set ns.out = ns.out ~ ch %}{%set ns.used = ns.used + b %}
+            {%-else%}
+              {%-set ns.full = true %}
+            {%-endif%}
+          {%-endfor%}
+          {{- ns.out }}
+        {%-endmacro%}
+        {%set artist_bytes = bytes(chosen.artist) | int %}
+        {%set title_room = [bytes(chosen.title) | int, label_room - [artist_bytes, label_room // 3] | min, 100] | min %}
+        {%set artist_room = [artist_bytes, label_room - title_room, 50] | min %}
+        {{ {'title': cut(chosen.title, title_room) if title_room > 0 else '',
+            'artist': cut(chosen.artist, artist_room) if artist_room > 0 else ''} }}
+  - if:
+      - condition: template
+        value_template: "{{ label_room < 0 or tag_request | length > 255 }}"
+    then:
+      - action: persistent_notification.create
+        data:
+          notification_id: "{{ notification_id }}"
+          title: TagTuner music tag
+          message: "{{ tag_request }} is too long for the tag. Nothing was written."
+      - stop: URI too long
+  - action: text.set_value
+    data:
+      value: "{{ labels.artist }}"
+    target:
+      entity_id: "{{ text_playlist_artist }}"
+  - action: text.set_value
+    data:
+      value: "{{ labels.title }}"
+    target:
+      entity_id: "{{ text_playlist_name }}"
+  - action: text.set_value
+    data:
+      value: "{{ tag_request }}"
+    target:
+      entity_id: "{{ text_playlist_uri }}"
+  - action: button.press
+    target:
+      entity_id: "{{ button_write_tag }}"
+  - action: persistent_notification.create
+    data:
+      notification_id: "{{ notification_id }}"
+      title: TagTuner music tag
+      message: |-
+        Writing {{ chosen.title or 'the URI' }}{{ ' by ' ~ chosen.artist if chosen.artist }} as {{ tag_request }}. Place the tag on the reader within 30 seconds.
+        {%if given_uri == '' and matches | length > 1 %}
+
+        Other matches, run again with their URI if this is the wrong one:
+        {%for m in matches[1:6] %}
+        - {{ m.title }}{{ ' · ' ~ m.artist if m.artist }} ({{ m.type }}): {{ m.uri }}
+        {%endfor%}
+        {%endif%}
+  - alias: >-
+      clear the current tag once writing ends, or the first scan of the new tag
+      looks like a rescan of the tag that is playing
+    sequence:
+      - wait_template: "{{ is_state(sensor_writing, 'on') }}"
+        timeout:
+          seconds: 10
+      - wait_template: "{{ is_state(sensor_writing, 'off') }}"
+        timeout:
+          seconds: 40
+      - action: text.set_value
+        data:
+          value: ""
+        target:
+          entity_id: "{{ text_playlist_uri }}"
+mode: single
