@@ -18,7 +18,7 @@ Research (HA `dev` source and docs, 2026-10-07): HA's Plex integration can play 
 - Video tags use `plexvideo://{json}`. The prefix can't collide with Music Assistant providers (`plex://` is already Plex music). JSON only, no rating keys: readable on the tag, survives items being re-added, and lets the blueprint tell shows from movies.
 - Show tags default to the next unwatched episode with `continuous`, falling back to shuffle when nothing is unwatched. `"shuffle":true` on the tag means random. Movies and episodes resume by default.
 - Starting a video wakes the Apple TV, launches Plex, presses Plex's scan clients button and waits for the Plex entity, then plays. A failure posts an HA notification.
-- The current tag (reader's Playlist URI text entity) decides where controls go. Video controls go through the Apple TV entity and remote (play/pause, `skip_forward`/`skip_backward`, volume steps) so they don't depend on the Plex entity's limited volume support.
+- The current tag (reader's Playlist URI text entity) decides where controls go. Video controls go through the Apple TV entity and remote (play/pause, next/previous track, volume steps) so they don't depend on the Plex entity's limited volume support.
 - One source at a time: a video tag pauses music, a music tag pauses Plex on the Apple TV. Lifting a video tag does nothing.
 - Netflix is out for now.
 
@@ -26,5 +26,5 @@ Research (HA `dev` source and docs, 2026-10-07): HA's Plex integration can play 
 
 - The fork diverges further from upstream's blueprint.
 - The in-order show search (`unwatched`, `sort: originallyAvailableAt:asc`, `maxresults: 1`) is built from documented plexapi filters but untested; air-date order can differ from episode order for specials.
-- Skip step size is whatever the Plex app does for `skip_forward`/`skip_backward`. The volume limiter doesn't apply to the Apple TV.
+- In Plezy, next track jumps to the next episode and previous track restarts the current one; it never goes back an episode, even on a quick double press (tested 2026-10-28). The volume limiter doesn't apply to the Apple TV.
 - A cold start can take up to the startup timeout (60s default), and other reader events queue behind it.

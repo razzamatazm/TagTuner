@@ -26,4 +26,4 @@ Tested on the user's Apple TV on 2026-10-08: `infuse://series/82728?play` (Bluey
 - No Plex client entity or Plex integration is needed for playback.
 - Random episodes are not possible through Infuse links. Doing it would need HA to read the episode list from the Plex server (e.g. a `rest_command`) and open a specific episode link.
 - Tags need a TMDB id, which has to be looked up on themoviedb.org.
-- Whether Infuse honours `skip_forward`/`skip_backward` from the remote is untested.
+- Whether Infuse honours next/previous track from the Apple TV media player is untested.

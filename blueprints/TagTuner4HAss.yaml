@@ -687,13 +687,18 @@ actions:
                       entity_id: !input appletv
               - conditions:
                   - condition: template
-                    value_template: '{{ action in ("trackNext", "trackPrevious") and appletv_remote != "" }}'
+                    value_template: '{{ action == "trackNext" }}'
                 sequence:
-                  - action: remote.send_command
-                    data:
-                      command: "{%if action == 'trackNext' %}skip_forward{%else%}skip_backward{%endif%}"
+                  - action: media_player.media_next_track
                     target:
-                      entity_id: "{{ appletv_remote }}"
+                      entity_id: !input appletv
+              - conditions:
+                  - condition: template
+                    value_template: '{{ action == "trackPrevious" }}'
+                sequence:
+                  - action: media_player.media_previous_track
+                    target:
+                      entity_id: !input appletv
               - conditions:
                   - condition: template
                     value_template: '{{ action == "volumeUp" }}'
